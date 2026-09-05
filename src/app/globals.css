@@ -1,26 +1,156 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Dark theme (default) */
+  --phantom-bg: #07070f;
+  --phantom-surface: #0d0d1a;
+  --phantom-elevated: #14142b;
+  --phantom-border: #1e1e3f;
+  --phantom-glow: #6366f1;
+  --phantom-accent: #818cf8;
+  --phantom-success: #34d399;
+  --phantom-danger: #f87171;
+  --phantom-warning: #fbbf24;
+  --phantom-text: #e2e8f0;
+  --phantom-muted: #64748b;
+  --phantom-radius: 1.25rem;
+  --phantom-radius-lg: 1.75rem;
+  color-scheme: dark;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+[data-theme="light"] {
+  --phantom-bg: #fafcff; /* Pristine off-white with a hint of blue */
+  --phantom-surface: rgba(255, 255, 255, 0.85); /* Translucent glass */
+  --phantom-elevated: #ffffff; /* Pure white for elements */
+  --phantom-border: #e2e8f0; /* Soft slate border */
+  --phantom-glow: #2563eb; /* Deeper vibrant blue */
+  --phantom-accent: #7c3aed; /* Deep purple */
+  --phantom-success: #10b981;
+  --phantom-danger: #ef4444;
+  --phantom-warning: #f59e0b;
+  --phantom-text: #0f172a; /* Slate 900 */
+  --phantom-muted: #64748b; /* Slate 500 */
+  color-scheme: light;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--phantom-bg);
+  color: var(--phantom-text);
+  font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+::selection {
+  background-color: var(--phantom-glow);
+  color: #ffffff;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--phantom-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--phantom-border);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--phantom-muted);
+}
+
+/* Animations */
+@keyframes phantom-glow-pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+@keyframes phantom-slide-up { from { opacity: 0; transform: translateY(1rem); } to { opacity: 1; transform: translateY(0); } }
+@keyframes phantom-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes phantom-shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+@keyframes phantom-countdown-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+@keyframes phantom-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes phantom-grid-fade { 0%, 100% { opacity: 0.03; } 50% { opacity: 0.06; } }
+
+/* Utilities */
+.phantom-animate-in {
+  animation: phantom-slide-up 0.5s ease forwards;
+}
+
+.phantom-shimmer {
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.05), transparent);
+  background-size: 200% 100%;
+  animation: phantom-shimmer 2s infinite linear;
+}
+
+.phantom-glow-ring {
+  box-shadow: 0 0 15px var(--phantom-glow);
+}
+
+/* Glassmorphism */
+.glass-panel {
+  background: rgba(13, 13, 26, 0.4);
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="light"] .glass-panel {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.05);
+}
+
+/* Spotlight Effect Container */
+.spotlight-wrapper {
+  position: relative;
+  overflow: hidden;
+}
+
+.spotlight-wrapper::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    600px circle at var(--mouse-x, -9999px) var(--mouse-y, -9999px),
+    rgba(99, 102, 241, 0.15),
+    transparent 40%
+  );
+  z-index: 10;
+  transition: opacity 0.3s;
+}
+
+.spotlight-wrapper:hover::before {
+  opacity: 1;
+}
+
+/* Base Accessibility Styles */
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--phantom-glow);
+  outline-offset: 2px;
+}
+
+/* Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
