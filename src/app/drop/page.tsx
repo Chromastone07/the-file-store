@@ -117,7 +117,7 @@ export default function DropPage() {
           .rpc('get_drops_by_lookup_code', { p_code: dbLookupCode });
         
         // If no rows exist, or if ALL files in the group are destroyed
-        if (!data || data.length === 0 || data.every(d => d.is_destroyed)) {
+        if (!data || data.length === 0 || data.every((d: any) => d.is_destroyed)) {
           setIsDestroyed(true);
         }
       } catch (e) {}
