@@ -1,5 +1,7 @@
 "use client";
 
+import DOMPurify from 'dompurify';
+
 interface DocumentViewerProps {
   content: string;
   filename: string;
@@ -52,7 +54,7 @@ export default function DocumentViewer({ content, filename, viewOnly = false }: 
 
   // Simple markdown to HTML (basic support)
   const renderMarkdown = (text: string): string => {
-    return text
+    const rawHtml = text
       // Headers
       .replace(/^### (.+)$/gm, '<h3 style="font-size:1.1rem;font-weight:700;margin:1.5rem 0 0.5rem;">$1</h3>')
       .replace(/^## (.+)$/gm, '<h2 style="font-size:1.3rem;font-weight:700;margin:1.5rem 0 0.5rem;">$1</h2>')
@@ -68,6 +70,12 @@ export default function DocumentViewer({ content, filename, viewOnly = false }: 
       .replace(/^---$/gm, '<hr style="border:none;border-top:1px solid var(--phantom-border);margin:1.5rem 0;" />')
       // Line breaks
       .replace(/\n/g, '<br />');
+
+    // Sanitize the HTML to prevent XSS
+    if (typeof window !== 'undefined') {
+      return DOMPurify.sanitize(rawHtml);
+    }
+    return rawHtml;
   };
 
   return (

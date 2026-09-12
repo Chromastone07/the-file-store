@@ -47,7 +47,6 @@ export default function PDFViewer({ src, filename, viewOnly = false }: PDFViewer
             className="w-full h-full border-none"
             title={`PDF: ${filename}`}
             onError={() => setError(true)}
-            sandbox={viewOnly ? 'allow-same-origin' : 'allow-same-origin allow-scripts'}
           />
         ) : (
           <div className="flex flex-col items-center justify-center h-full gap-4" style={{ color: 'var(--phantom-muted)' }}>

@@ -6,7 +6,8 @@
 -- 1. Drops table (encrypted file metadata)
 CREATE TABLE IF NOT EXISTS drops (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  session_code VARCHAR(10) UNIQUE NOT NULL,
+  session_code VARCHAR(64) UNIQUE NOT NULL,
+  group_code VARCHAR(64),
   storage_path TEXT NOT NULL,
   encrypted_filename TEXT,
   file_type VARCHAR(100),
@@ -25,7 +26,7 @@ CREATE TABLE IF NOT EXISTS drops (
 -- 2. Secure texts table
 CREATE TABLE IF NOT EXISTS secure_texts (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  session_code VARCHAR(10) UNIQUE NOT NULL,
+  session_code VARCHAR(64) UNIQUE NOT NULL,
   encrypted_content TEXT NOT NULL,
   content_type VARCHAR(50) DEFAULT 'text',
   encryption_iv TEXT NOT NULL,
@@ -42,7 +43,8 @@ CREATE TABLE IF NOT EXISTS secure_texts (
 -- 3. Clipboard sessions table (for real-time clipboard sync)
 CREATE TABLE IF NOT EXISTS clipboard_sessions (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  session_code VARCHAR(10) UNIQUE NOT NULL,
+  session_code VARCHAR(64) UNIQUE NOT NULL,
+  max_users INTEGER DEFAULT 2,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   expires_at TIMESTAMPTZ NOT NULL,
   is_active BOOLEAN DEFAULT TRUE
@@ -60,20 +62,137 @@ ALTER TABLE drops ENABLE ROW LEVEL SECURITY;
 ALTER TABLE secure_texts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE clipboard_sessions ENABLE ROW LEVEL SECURITY;
 
--- Allow anonymous reads/writes (the security comes from E2E encryption + session codes)
+-- Allow anonymous inserts only (the security comes from E2E encryption + session codes)
+DROP POLICY IF EXISTS "Allow anonymous insert on drops" ON drops;
 CREATE POLICY "Allow anonymous insert on drops" ON drops FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow anonymous select on drops" ON drops FOR SELECT USING (true);
-CREATE POLICY "Allow anonymous update on drops" ON drops FOR UPDATE USING (true);
-CREATE POLICY "Allow anonymous delete on drops" ON drops FOR DELETE USING (true);
 
+DROP POLICY IF EXISTS "Allow anonymous insert on secure_texts" ON secure_texts;
 CREATE POLICY "Allow anonymous insert on secure_texts" ON secure_texts FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow anonymous select on secure_texts" ON secure_texts FOR SELECT USING (true);
-CREATE POLICY "Allow anonymous update on secure_texts" ON secure_texts FOR UPDATE USING (true);
-CREATE POLICY "Allow anonymous delete on secure_texts" ON secure_texts FOR DELETE USING (true);
 
+DROP POLICY IF EXISTS "Allow anonymous insert on clipboard_sessions" ON clipboard_sessions;
 CREATE POLICY "Allow anonymous insert on clipboard_sessions" ON clipboard_sessions FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow anonymous select on clipboard_sessions" ON clipboard_sessions FOR SELECT USING (true);
-CREATE POLICY "Allow anonymous update on clipboard_sessions" ON clipboard_sessions FOR UPDATE USING (true);
+
+-- Ensure columns can handle 32-character hashes if tables were already created
+ALTER TABLE drops ALTER COLUMN session_code TYPE VARCHAR(64);
+DO $$ BEGIN
+    ALTER TABLE drops ADD COLUMN group_code VARCHAR(64);
+EXCEPTION
+    WHEN duplicate_column THEN
+        ALTER TABLE drops ALTER COLUMN group_code TYPE VARCHAR(64);
+END $$;
+ALTER TABLE secure_texts ALTER COLUMN session_code TYPE VARCHAR(64);
+ALTER TABLE clipboard_sessions ALTER COLUMN session_code TYPE VARCHAR(64);
+
+-- (SELECT, UPDATE, and DELETE are strictly controlled via the SECURITY DEFINER functions below)
+
+-- 6. RPC Functions for Secure Access
+-- These functions run with elevated privileges (SECURITY DEFINER) but only expose data for a specific session code.
+
+-- 6.1 Get Drop by Code
+CREATE OR REPLACE FUNCTION get_drop_by_code(p_code VARCHAR)
+RETURNS SETOF drops
+SECURITY DEFINER
+AS $$
+BEGIN
+  RETURN QUERY SELECT * FROM drops WHERE session_code = p_code;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 6.2 Get Drops by Lookup Code (for multi-file groups)
+CREATE OR REPLACE FUNCTION get_drops_by_lookup_code(p_code VARCHAR)
+RETURNS SETOF drops
+SECURITY DEFINER
+AS $$
+BEGIN
+  RETURN QUERY SELECT * FROM drops WHERE session_code = p_code OR group_code = p_code ORDER BY created_at ASC;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 6.3 Record Drop View & Optional Destroy
+CREATE OR REPLACE FUNCTION record_drop_view(p_code VARCHAR, p_burn BOOLEAN)
+RETURNS void
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_view_count INTEGER;
+  v_max_views INTEGER;
+  v_should_destroy BOOLEAN;
+BEGIN
+  SELECT view_count, max_views INTO v_view_count, v_max_views FROM drops WHERE session_code = p_code;
+  IF FOUND THEN
+    v_should_destroy := p_burn OR (v_max_views IS NOT NULL AND (v_view_count + 1) >= v_max_views);
+    UPDATE drops SET view_count = view_count + 1, is_destroyed = v_should_destroy WHERE session_code = p_code;
+  END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 6.4 Destroy Drop by Code
+CREATE OR REPLACE FUNCTION destroy_drop_by_code(p_code VARCHAR)
+RETURNS void
+SECURITY DEFINER
+AS $$
+BEGIN
+  UPDATE drops SET is_destroyed = TRUE WHERE session_code = p_code OR group_code = p_code;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 6.5 Get Secure Text by Code
+CREATE OR REPLACE FUNCTION get_secure_text_by_code(p_code VARCHAR)
+RETURNS SETOF secure_texts
+SECURITY DEFINER
+AS $$
+BEGIN
+  RETURN QUERY SELECT * FROM secure_texts WHERE session_code = p_code;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 6.6 Record Text View & Optional Destroy
+CREATE OR REPLACE FUNCTION record_text_view(p_code VARCHAR, p_burn BOOLEAN)
+RETURNS void
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_view_count INTEGER;
+  v_max_views INTEGER;
+  v_should_destroy BOOLEAN;
+BEGIN
+  SELECT view_count, max_views INTO v_view_count, v_max_views FROM secure_texts WHERE session_code = p_code;
+  IF FOUND THEN
+    v_should_destroy := p_burn OR (v_max_views IS NOT NULL AND (v_view_count + 1) >= v_max_views);
+    UPDATE secure_texts SET view_count = view_count + 1, is_destroyed = v_should_destroy WHERE session_code = p_code;
+  END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 6.7 Destroy Text by Code
+CREATE OR REPLACE FUNCTION destroy_text_by_code(p_code VARCHAR)
+RETURNS void
+SECURITY DEFINER
+AS $$
+BEGIN
+  UPDATE secure_texts SET is_destroyed = TRUE WHERE session_code = p_code;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 6.8 Get Clipboard Session
+CREATE OR REPLACE FUNCTION get_clipboard_session(p_code VARCHAR)
+RETURNS SETOF clipboard_sessions
+SECURITY DEFINER
+AS $$
+BEGIN
+  RETURN QUERY SELECT * FROM clipboard_sessions WHERE session_code = p_code;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 6.9 Delete Clipboard Session
+CREATE OR REPLACE FUNCTION delete_clipboard_session(p_code VARCHAR)
+RETURNS void
+SECURITY DEFINER
+AS $$
+BEGIN
+  DELETE FROM clipboard_sessions WHERE session_code = p_code;
+END;
+$$ LANGUAGE plpgsql;
 
 -- 6. Create a private storage bucket for encrypted drops
 -- NOTE: Run this in the Supabase Dashboard under Storage → New Bucket

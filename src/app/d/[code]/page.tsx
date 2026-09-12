@@ -3,17 +3,17 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
+import { zipSync } from 'fflate';
 import { decryptData, decryptWithPassword, hashString } from '@/lib/crypto';
 import { getDropsByLookupCode, getSignedDownloadUrl, recordView, destroyExpiredDrop, supabase } from '@/lib/supabase';
 import type { DropRecord } from '@/lib/supabase';
 import { getFileCategory, formatFileSize, extractKeyFromFragment } from '@/lib/utils';
 import Navbar from '@/components/layout/Navbar';
 import AnimatedBackground from '@/components/layout/AnimatedBackground';
-import FileViewerModal from '@/components/viewers/FileViewerModal';
-import CountdownTimer from '@/components/ui/CountdownTimer';
-import Link from 'next/link';
+import { useGlobalSession } from '@/context/GlobalSessionContext';
+import { useRouter } from 'next/navigation';
 
-type AccessState = 'loading' | 'password-required' | 'key-required' | 'decrypting' | 'ready' | 'destroyed' | 'error' | 'expired';
+type AccessState = 'loading' | 'password-required' | 'key-required' | 'decrypting' | 'destroyed' | 'error' | 'expired';
 
 interface DecryptedFile {
   drop: DropRecord;
@@ -25,43 +25,17 @@ export default function AccessDropPage() {
   const params = useParams();
   const code = params.code as string;
   
+  const { addActiveSession, setViewingSessionId } = useGlobalSession();
+  const router = useRouter();
+  
   const [state, setState] = useState<AccessState>('loading');
   const [drops, setDrops] = useState<DropRecord[]>([]);
   const [password, setPassword] = useState('');
   const [manualKey, setManualKey] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
-  const [decryptedFiles, setDecryptedFiles] = useState<DecryptedFile[]>([]);
-  const [activeFileIndex, setActiveFileIndex] = useState(0);
-  const [isViewerOpen, setIsViewerOpen] = useState(false);
   const dbLookupCodeRef = useRef<string>('');
-  
-  // Track if a view has been recorded for the currently active file during this modal session
-  const viewRecordedRef = useRef<Set<string>>(new Set());
-  const pendingDestroyedRef = useRef<Set<string>>(new Set());
-  const [triggerCleanup, setTriggerCleanup] = useState(0);
-  const expiryFiredRef = useRef(false);
 
-  // ── SECURITY: Revoke all blob URLs and wipe decrypted state ──
-  const nukeDecryptedState = useCallback(() => {
-    setDecryptedFiles(prev => {
-      prev.forEach(f => URL.revokeObjectURL(f.blobUrl));
-      return [];
-    });
-    setIsViewerOpen(false);
-    setActiveFileIndex(0);
-  }, []);
 
-  // ── SECURITY: Handle client-side expiry enforcement ──
-  const handleExpired = useCallback(() => {
-    if (expiryFiredRef.current) return;
-    expiryFiredRef.current = true;
-    nukeDecryptedState();
-    setState('expired');
-    // Also trigger server-side cleanup for all drops in this session
-    drops.forEach(d => {
-      destroyExpiredDrop(d.session_code).catch(() => {});
-    });
-  }, [nukeDecryptedState, drops]);
 
   useEffect(() => {
     const fetchDrop = async () => {
@@ -105,94 +79,7 @@ export default function AccessDropPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code]);
 
-  // Real-time subscription + polling fallback for purge detection
-  useEffect(() => {
-    if (drops.length === 0 || state === 'destroyed' || state === 'expired' || state === 'loading') return;
-    
-    const pollInterval = setInterval(async () => {
-      try {
-        const { data } = await getDropsByLookupCode(dbLookupCodeRef.current);
-        if (data) {
-          const now = new Date();
-          let allExpiredOrDestroyed = true;
-          data.forEach(d => {
-            if (d.is_destroyed) {
-              pendingDestroyedRef.current.add(d.session_code);
-            } else if (new Date(d.expires_at) < now) {
-              // Server confirms expiry — enforce client-side
-              pendingDestroyedRef.current.add(d.session_code);
-            } else {
-              allExpiredOrDestroyed = false;
-            }
-          });
-          if (allExpiredOrDestroyed && data.length > 0) {
-            handleExpired();
-          }
-          setTriggerCleanup(t => t + 1);
-        }
-      } catch {}
-    }, 5000);
 
-    const channels = drops.map(drop => {
-      return supabase
-        .channel(`drop-watch-${drop.session_code}`)
-        .on(
-          'postgres_changes',
-          { event: 'UPDATE', schema: 'public', table: 'drops', filter: `session_code=eq.${drop.session_code}` },
-          (payload: any) => {
-            if (payload.new?.is_destroyed) {
-              pendingDestroyedRef.current.add(drop.session_code);
-              setTriggerCleanup(t => t + 1);
-            }
-          }
-        )
-        .subscribe();
-    });
-
-    return () => {
-      clearInterval(pollInterval);
-      channels.forEach(ch => supabase.removeChannel(ch));
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drops, state]);
-
-  // Dedicated cleanup effect for BAR files
-  useEffect(() => {
-    if (pendingDestroyedRef.current.size === 0) return;
-    
-    const activeSessionCode = (isViewerOpen && decryptedFiles[activeFileIndex]) 
-      ? decryptedFiles[activeFileIndex].drop.session_code 
-      : null;
-
-    let removedAny = false;
-
-    setDecryptedFiles(prev => {
-      const updated = prev.filter(f => {
-        const isPending = pendingDestroyedRef.current.has(f.drop.session_code);
-        const isCurrentlyViewing = activeSessionCode === f.drop.session_code;
-        if (isPending && !isCurrentlyViewing) {
-          URL.revokeObjectURL(f.blobUrl);
-          removedAny = true;
-          return false;
-        }
-        return true;
-      });
-
-      if (removedAny && updated.length === 0) {
-        setState('destroyed');
-      }
-      return updated;
-    });
-
-    if (removedAny) {
-      setDrops(prev => prev.filter(d => {
-        const isPending = pendingDestroyedRef.current.has(d.session_code);
-        const isCurrentlyViewing = activeSessionCode === d.session_code;
-        return !(isPending && !isCurrentlyViewing);
-      }));
-    }
-
-  }, [activeFileIndex, isViewerOpen, triggerCleanup]);
 
   const handleDecryption = async (dropList: DropRecord[], providedPassword?: string) => {
     setState('decrypting');
@@ -246,15 +133,23 @@ export default function AccessDropPage() {
         results.push({ drop: dropData, blobUrl: objectUrl, textContent });
       }
 
-      // Note: we don't record view on load anymore. We record view only when the file is opened in the viewer modal.
-
-      setDecryptedFiles(results);
-      setState('ready');
-
-      // SECURITY: Scrub the session code from the URL bar so it can't be shoulder-surfed or saved in browser history
-      if (typeof window !== 'undefined') {
-        window.history.replaceState(null, '', `/d/accessed`);
+      let sessionTitle = 'FILE DROP';
+      if (results.length > 0) {
+        sessionTitle = results[0].drop.encrypted_filename || 'FILE DROP';
+        if (results.length > 1) {
+          sessionTitle += ` +${results.length - 1}`;
+        }
       }
+
+      addActiveSession({
+        type: 'drop',
+        id: rawCode, // Display the short code, not the hash
+        title: sessionTitle,
+        files: results
+      });
+
+      setViewingSessionId(rawCode);
+      router.replace('/');
     } catch (err: any) {
       console.error('Decryption error:', err.message || err);
       setState('error');
@@ -275,9 +170,6 @@ export default function AccessDropPage() {
     e.preventDefault();
     if (drops.length > 0 && manualKey) handleDecryption(drops);
   };
-
-  const activeFile = decryptedFiles[activeFileIndex];
-  const isMulti = decryptedFiles.length > 1;
 
   return (
     <div className="min-h-screen flex flex-col relative text-[var(--phantom-text)]">
@@ -338,103 +230,7 @@ export default function AccessDropPage() {
           </motion.div>
         )}
 
-        {/* Ready */}
-        {state === 'ready' && activeFile && (
-          <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="w-full max-w-2xl bg-[var(--phantom-surface)] border border-[var(--phantom-border)] rounded-xl overflow-hidden">
-            
-            {/* Multi-file Switcher */}
-            {isMulti && (
-              <div className="bg-[var(--phantom-elevated)] border-b border-[var(--phantom-border)] p-3 flex gap-2 overflow-x-auto custom-scrollbar">
-                {decryptedFiles.map((file, idx) => (
-                  <button
-                    key={idx}
-                    onClick={() => setActiveFileIndex(idx)}
-                    className={`shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                      idx === activeFileIndex
-                        ? 'bg-[var(--phantom-glow)] text-white shadow-md'
-                        : 'bg-[var(--phantom-surface)] text-[var(--phantom-muted)] hover:text-[var(--phantom-text)] hover:bg-[var(--phantom-border)]'
-                    }`}
-                  >
-                    {file.drop.encrypted_filename || `File ${idx + 1}`}
-                  </button>
-                ))}
-              </div>
-            )}
 
-            <div className="p-8 border-b border-[var(--phantom-border)]">
-              <div className="flex flex-col md:flex-row md:items-start justify-between gap-4 mb-6">
-                <div>
-                  <h2 className="text-2xl font-bold break-all">{activeFile.drop.encrypted_filename || 'Unknown File'}</h2>
-                  <div className="flex items-center space-x-3 mt-2 text-[var(--phantom-muted)]">
-                    <span>{formatFileSize(activeFile.drop.file_size)}</span>
-                    <span>•</span>
-                    <span className="uppercase text-xs font-semibold tracking-wider bg-[var(--phantom-elevated)] px-2 py-1 rounded">
-                      {getFileCategory(activeFile.drop.file_type || '')}
-                    </span>
-                    {isMulti && (
-                      <>
-                        <span>•</span>
-                        <span className="text-xs font-medium text-[var(--phantom-glow)]">
-                          {activeFileIndex + 1} of {decryptedFiles.length} files
-                        </span>
-                      </>
-                    )}
-                  </div>
-                </div>
-                <div className="shrink-0 text-right">
-                  <div className="text-sm text-[var(--phantom-muted)] mb-1">Expires in</div>
-                  <div className="text-xl font-mono text-[var(--phantom-danger)]">
-                    <CountdownTimer expiresAt={activeFile.drop.expires_at} size="lg" onExpired={handleExpired} />
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-2 mb-8">
-                <span className="flex items-center px-3 py-1 bg-[var(--phantom-success)]/10 text-[var(--phantom-success)] rounded-full text-xs font-medium">
-                  <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
-                  E2E Encrypted
-                </span>
-                {activeFile.drop.burn_after_reading && (
-                  <span className="flex items-center px-3 py-1 bg-[var(--phantom-danger)]/10 text-[var(--phantom-danger)] rounded-full text-xs font-medium">
-                    <svg className="w-3 h-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.879 16.121A3 3 0 1012.015 11L11 14H9c0 .768.293 1.536.879 2.121z" /></svg>
-                    Burn After Reading
-                  </span>
-                )}
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <button
-                  onClick={() => {
-                    setIsViewerOpen(true);
-                    if (!viewRecordedRef.current.has(activeFile.drop.session_code)) {
-                      recordView(activeFile.drop.session_code, activeFile.drop.burn_after_reading);
-                      viewRecordedRef.current.add(activeFile.drop.session_code);
-                    }
-                  }}
-                  className="w-full bg-[var(--phantom-elevated)] hover:bg-[var(--phantom-border)] text-[var(--phantom-text)] font-medium py-3 rounded-lg transition-colors flex justify-center items-center"
-                >
-                  <svg className="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
-                  Open Viewer
-                </button>
-                
-                {!activeFile.drop.burn_after_reading && (
-                  <a
-                    href={activeFile.blobUrl}
-                    download={activeFile.drop.encrypted_filename || 'download'}
-                    className="w-full bg-[var(--phantom-glow)] hover:bg-[var(--phantom-accent)] text-white font-medium py-3 rounded-lg transition-colors flex justify-center items-center disabled:opacity-50"
-                  >
-                    <svg className="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-                    Download
-                  </a>
-                )}
-              </div>
-            </div>
-            
-            <div className="bg-[var(--phantom-elevated)] px-8 py-4 text-center text-sm text-[var(--phantom-muted)]">
-              Viewed successfully
-            </div>
-          </motion.div>
-        )}
 
         {/* Expired / Destroyed */}
         {(state === 'destroyed' || state === 'expired') && (
@@ -454,9 +250,9 @@ export default function AccessDropPage() {
                 ? "This was a one-time link and it's already been used. If you were expecting this file, ask the sender for a new session." 
                 : "The sender's timer ran out before this link was opened. Nothing was ever stored longer than that window."}
             </p>
-            <Link href="/" className="inline-block bg-transparent hover:bg-[var(--phantom-glow)]/10 text-[var(--phantom-text)] border border-[var(--phantom-border)] hover:border-[var(--phantom-glow)]/30 font-medium px-5 py-2.5 rounded-full transition-colors text-[13.5px]">
+            <button onClick={() => router.push('/')} className="inline-block bg-transparent hover:bg-[var(--phantom-glow)]/10 text-[var(--phantom-text)] border border-[var(--phantom-border)] hover:border-[var(--phantom-glow)]/30 font-medium px-5 py-2.5 rounded-full transition-colors text-[13.5px]">
               Send a new file instead
-            </Link>
+            </button>
           </motion.div>
         )}
 
@@ -476,35 +272,7 @@ export default function AccessDropPage() {
 
       </main>
 
-      {isViewerOpen && activeFile && (
-        <FileViewerModal 
-          onClose={() => setIsViewerOpen(false)} 
-          blobUrl={activeFile.blobUrl} 
-          textContent={activeFile.textContent}
-          filename={activeFile.drop.encrypted_filename || 'Unknown File'}
-          viewOnly={activeFile.drop.burn_after_reading}
-          currentIndex={activeFileIndex}
-          totalFiles={decryptedFiles.length}
-          onNext={() => {
-            const nextIdx = (activeFileIndex + 1) % decryptedFiles.length;
-            setActiveFileIndex(nextIdx);
-            const nextFile = decryptedFiles[nextIdx];
-            if (!viewRecordedRef.current.has(nextFile.drop.session_code)) {
-              recordView(nextFile.drop.session_code, nextFile.drop.burn_after_reading);
-              viewRecordedRef.current.add(nextFile.drop.session_code);
-            }
-          }}
-          onPrev={() => {
-            const prevIdx = (activeFileIndex - 1 + decryptedFiles.length) % decryptedFiles.length;
-            setActiveFileIndex(prevIdx);
-            const prevFile = decryptedFiles[prevIdx];
-            if (!viewRecordedRef.current.has(prevFile.drop.session_code)) {
-              recordView(prevFile.drop.session_code, prevFile.drop.burn_after_reading);
-              viewRecordedRef.current.add(prevFile.drop.session_code);
-            }
-          }}
-        />
-      )}
+
     </div>
   );
 }

@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import CountdownTimer from '@/components/ui/CountdownTimer';
 import LiveViewCount from '@/components/ui/LiveViewCount';
 import SpotlightCard from '@/components/ui/SpotlightCard';
+import CustomSelect from '@/components/ui/CustomSelect';
 
 export default function TextPage() {
   const [text, setText] = useState('');
@@ -20,6 +21,8 @@ export default function TextPage() {
   const [customExpiryValue, setCustomExpiryValue] = useState<number>(1);
   const [customExpiryUnit, setCustomExpiryUnit] = useState<'minutes'|'seconds'>('minutes');
   const [contentType, setContentType] = useState('Text');
+  const [burnAfterReading, setBurnAfterReading] = useState(false);
+  const [isDestroyed, setIsDestroyed] = useState(false);
   const { uploadText, destructText, isProcessing: isUploading, result } = useFileUpload();
   
   const [qrCodeUrl, setQrCodeUrl] = useState('');
@@ -50,7 +53,7 @@ export default function TextPage() {
       } else {
         finalExpiry = finalExpiry * 60; // Preset values are in minutes
       }
-      await uploadText(text, contentType, { expirySeconds: finalExpiry, burnAfterReading: false });
+      await uploadText(text, contentType, { expirySeconds: finalExpiry, burnAfterReading });
       toast.success('Text encrypted and shared securely!');
     } catch (err) {
       toast.error('Failed to encrypt and share text.');
@@ -106,29 +109,51 @@ export default function TextPage() {
               <div className="flex flex-col md:flex-row gap-4 border-t border-[var(--phantom-border)] pt-6">
                 <div className="flex-1 flex flex-col gap-2">
                   <label className="text-sm font-medium text-[var(--phantom-muted)]">Content Type</label>
-                  <select 
+                  <CustomSelect 
                     value={contentType}
-                    onChange={(e) => setContentType(e.target.value)}
-                    className="w-full bg-[var(--phantom-elevated)] border border-[var(--phantom-border)] rounded-lg px-3 py-2 text-[var(--phantom-text)] focus:outline-none focus:border-[var(--phantom-glow)]"
-                  >
-                    <option value="Text">Plain Text</option>
-                    <option value="Code">Code Snippet</option>
-                    <option value="Note">Secure Note</option>
-                  </select>
+                    onChange={(val) => setContentType(val)}
+                    options={[
+                      { label: "Plain Text", value: "Text" },
+                      { label: "Code Snippet", value: "Code" },
+                      { label: "Secure Note", value: "Note" }
+                    ]}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between bg-[var(--phantom-elevated)] p-4 rounded-xl border border-[var(--phantom-border)]">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-[var(--phantom-danger)]/10 text-[var(--phantom-danger)] flex items-center justify-center">
+                      <Bomb className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="font-medium text-[var(--phantom-text)]">Burn after reading</div>
+                      <div className="text-sm text-[var(--phantom-muted)]">Text is permanently deleted after first view (One-time link)</div>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={burnAfterReading} 
+                      onChange={(e) => setBurnAfterReading(e.target.checked)} 
+                      className="sr-only peer" 
+                    />
+                    <div className="w-11 h-6 bg-[var(--phantom-border)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-[var(--phantom-border)] after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[var(--phantom-danger)]"></div>
+                  </label>
                 </div>
 
                 <div className="flex-1 flex flex-col gap-2">
                   <label className="text-sm font-medium text-[var(--phantom-muted)]">Expiry Time</label>
-                  <select 
+                  <CustomSelect 
                     value={expiry}
-                    onChange={(e) => setExpiry(Number(e.target.value))}
-                    className="w-full bg-[var(--phantom-elevated)] border border-[var(--phantom-border)] rounded-lg px-3 py-2 text-[var(--phantom-text)] focus:outline-none focus:border-[var(--phantom-glow)] transition-colors"
-                  >
-                    {PHANTOM_CONFIG?.EXPIRY_PRESETS?.map((preset: any) => (
-                      <option key={preset.value} value={preset.value}>{preset.label}</option>
-                    ))}
-                    <option value={-1}>Custom</option>
-                  </select>
+                    onChange={(val) => setExpiry(Number(val))}
+                    options={[
+                      ...(PHANTOM_CONFIG?.EXPIRY_PRESETS?.map((preset: any) => ({
+                        label: preset.label,
+                        value: preset.value
+                      })) || []),
+                      { label: "Custom", value: -1 }
+                    ]}
+                  />
                   
                   {expiry === -1 && (
                     <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="mt-1 flex items-center gap-2 bg-[var(--phantom-elevated)]/50 p-2 rounded-lg border border-[var(--phantom-border)]">
@@ -140,14 +165,15 @@ export default function TextPage() {
                         onChange={(e) => setCustomExpiryValue(Math.max(1, parseInt(e.target.value) || 1))}
                         className="w-16 bg-[var(--phantom-surface)] border border-[var(--phantom-border)] rounded-md px-2 py-1 text-center text-sm text-[var(--phantom-text)] focus:outline-none focus:border-[var(--phantom-glow)] transition-colors"
                       />
-                      <select
+                      <CustomSelect
                         value={customExpiryUnit}
-                        onChange={(e) => setCustomExpiryUnit(e.target.value as 'minutes'|'seconds')}
-                        className="bg-transparent text-sm text-[var(--phantom-muted)] focus:outline-none"
-                      >
-                        <option value="minutes">minutes</option>
-                        <option value="seconds">seconds</option>
-                      </select>
+                        onChange={(val) => setCustomExpiryUnit(val as 'minutes'|'seconds')}
+                        options={[
+                          { label: "minutes", value: "minutes" },
+                          { label: "seconds", value: "seconds" }
+                        ]}
+                        className="w-32 ml-auto"
+                      />
                     </motion.div>
                   )}
                 </div>
@@ -163,6 +189,28 @@ export default function TextPage() {
                   {isUploading ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Shield className="w-5 h-5" />}
                   {isUploading ? 'Encrypting & Uploading...' : 'Encrypt & Share'}
                 </motion.button>
+              </SpotlightCard>
+            </motion.div>
+          ) : isDestroyed ? (
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ type: "spring", stiffness: 200, damping: 20 }}
+            >
+              <SpotlightCard className="p-12 flex flex-col items-center gap-6 text-center">
+                <div className="w-20 h-20 bg-[var(--phantom-danger)]/10 rounded-full flex items-center justify-center text-[var(--phantom-danger)]">
+                  <Bomb className="w-10 h-10" />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold text-[var(--phantom-text)] mb-2">Text Destroyed</h2>
+                  <p className="text-[var(--phantom-muted)] max-w-sm mx-auto">This secure text no longer exists. It has been successfully wiped from the server.</p>
+                </div>
+                <button 
+                  onClick={() => window.location.reload()}
+                  className="mt-4 px-6 py-2 bg-[var(--phantom-elevated)] hover:bg-[var(--phantom-border)] border border-[var(--phantom-border)] rounded-full text-[var(--phantom-text)] transition-colors"
+                >
+                  Share another snippet
+                </button>
               </SpotlightCard>
             </motion.div>
           ) : (
@@ -227,6 +275,7 @@ export default function TextPage() {
                         try {
                           await destructText(result.sessionCode);
                           toast.success('Session manually destroyed.');
+                          setIsDestroyed(true);
                         } catch (err) {
                           toast.error('Failed to destroy session.');
                         }

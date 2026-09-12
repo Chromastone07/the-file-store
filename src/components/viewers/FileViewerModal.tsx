@@ -6,6 +6,9 @@ import VideoPlayer from './VideoPlayer';
 import PDFViewer from './PDFViewer';
 import CodeViewer from './CodeViewer';
 import DocumentViewer from './DocumentViewer';
+import AudioViewer from './AudioViewer';
+import WordViewer from './WordViewer';
+import SpreadsheetViewer from './SpreadsheetViewer';
 
 interface FileViewerModalProps {
   filename: string;
@@ -17,6 +20,7 @@ interface FileViewerModalProps {
   totalFiles?: number;
   onNext?: () => void;
   onPrev?: () => void;
+  onMediaEnded?: () => void;
 }
 
 export default function FileViewerModal({
@@ -28,7 +32,8 @@ export default function FileViewerModal({
   currentIndex,
   totalFiles,
   onNext,
-  onPrev
+  onPrev,
+  onMediaEnded
 }: FileViewerModalProps) {
   const category = getFileCategory(filename);
 
@@ -44,12 +49,20 @@ export default function FileViewerModal({
       case 'image':
         return <ImageViewer src={blobUrl} filename={filename} viewOnly={viewOnly} />;
       case 'video':
-        return <VideoPlayer src={blobUrl} filename={filename} viewOnly={viewOnly} />;
+        return <VideoPlayer src={blobUrl} filename={filename} viewOnly={viewOnly} onEnded={onMediaEnded} />;
       case 'pdf':
         return <PDFViewer src={blobUrl} filename={filename} viewOnly={viewOnly} />;
+      case 'audio':
+        return <AudioViewer src={blobUrl} filename={filename} viewOnly={viewOnly} onEnded={onMediaEnded} />;
       case 'code':
         return <CodeViewer code={textContent || ''} filename={filename} viewOnly={viewOnly} />;
+      case 'spreadsheet':
+        return <SpreadsheetViewer src={blobUrl} filename={filename} viewOnly={viewOnly} />;
       case 'document':
+        const ext = filename.split('.').pop()?.toLowerCase();
+        if (ext === 'doc' || ext === 'docx') {
+          return <WordViewer src={blobUrl} filename={filename} viewOnly={viewOnly} />;
+        }
         return <DocumentViewer content={textContent || ''} filename={filename} viewOnly={viewOnly} />;
       default:
         return (
@@ -95,17 +108,31 @@ export default function FileViewerModal({
         onClick={onClose}
       />
 
-      {/* Close button (Floating outside the modal to prevent overlap) */}
-      <button
-        onClick={onClose}
-        className="fixed top-4 right-4 md:top-6 md:right-6 z-50 w-12 h-12 rounded-full flex items-center justify-center transition-colors bg-[var(--phantom-surface)] border border-[var(--phantom-border)] text-[var(--phantom-text)] hover:text-[var(--phantom-danger)] hover:border-[var(--phantom-danger)] shadow-2xl"
-        aria-label="Close viewer"
-      >
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <line x1="18" y1="6" x2="6" y2="18" />
-          <line x1="6" y1="6" x2="18" y2="18" />
-        </svg>
-      </button>
+      {/* Action buttons (Floating outside the modal to prevent overlap) */}
+      <div className="fixed top-4 right-4 md:top-6 md:right-6 z-50 flex items-center gap-3">
+        {!viewOnly && blobUrl && (
+          <a
+            href={blobUrl}
+            download={filename}
+            className="w-12 h-12 rounded-full flex items-center justify-center transition-colors bg-[var(--phantom-surface)] border border-[var(--phantom-border)] text-[var(--phantom-text)] hover:text-[var(--phantom-glow)] hover:border-[var(--phantom-glow)] shadow-2xl"
+            aria-label="Download file"
+          >
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+          </a>
+        )}
+        <button
+          onClick={onClose}
+          className="w-12 h-12 rounded-full flex items-center justify-center transition-colors bg-[var(--phantom-surface)] border border-[var(--phantom-border)] text-[var(--phantom-text)] hover:text-[var(--phantom-danger)] hover:border-[var(--phantom-danger)] shadow-2xl"
+          aria-label="Close viewer"
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
 
       {/* Modal */}
       <div

@@ -46,7 +46,7 @@ export default function Navbar() {
   const navLinks = [
     { label: "Drop", href: "/drop" },
     { label: "Text", href: "/text" },
-    { label: "Clipboard", href: "/clipboard" },
+    { label: "Chat", href: "/chat" },
     { label: "Manage", href: "/manage" },
   ];
 

@@ -95,21 +95,16 @@ export async function createDropRecord(drop: {
 /** Fetch a drop by session code */
 export async function getDropByCode(code: string): Promise<{ data: DropRecord | null; error: Error | null }> {
   const { data, error } = await supabase
-    .from('drops')
-    .select('*')
-    .eq('session_code', code)
+    .rpc('get_drop_by_code', { p_code: code })
     .single();
-  return { data, error: error ? new Error(error.message) : null };
+  return { data: data as DropRecord | null, error: error ? new Error(error.message) : null };
 }
 
 /** Fetch all drops belonging to a group or matching a session code */
 export async function getDropsByLookupCode(lookupCode: string): Promise<{ data: DropRecord[] | null; error: Error | null }> {
   const { data, error } = await supabase
-    .from('drops')
-    .select('*')
-    .or(`group_code.eq.${lookupCode},session_code.eq.${lookupCode}`)
-    .order('created_at', { ascending: true });
-  return { data, error: error ? new Error(error.message) : null };
+    .rpc('get_drops_by_lookup_code', { p_code: lookupCode });
+  return { data: data as DropRecord[] | null, error: error ? new Error(error.message) : null };
 }
 
 /** Get a signed URL for downloading an encrypted file */
@@ -123,33 +118,19 @@ export async function getSignedDownloadUrl(storagePath: string): Promise<string 
 
 /** Increment view count and optionally mark as destroyed (burn after reading) */
 export async function recordView(sessionCode: string, burnAfterReading: boolean): Promise<void> {
-  const { data } = await supabase
-    .from('drops')
-    .select('view_count, max_views')
-    .eq('session_code', sessionCode)
-    .single();
+  const { data: drop } = await getDropByCode(sessionCode);
+  if (!drop) return;
 
-  if (!data) return;
+  const newCount = (drop.view_count || 0) + 1;
+  const shouldDestroy = burnAfterReading || (drop.max_views && newCount >= drop.max_views);
 
-  const newCount = (data.view_count || 0) + 1;
-  const shouldDestroy = burnAfterReading || (data.max_views && newCount >= data.max_views);
-
-  await supabase
-    .from('drops')
-    .update({
-      view_count: newCount,
-      is_destroyed: shouldDestroy || false,
-    })
-    .eq('session_code', sessionCode);
+  await supabase.rpc('record_drop_view', { p_code: sessionCode, p_burn: burnAfterReading });
 
   // If destroyed, also delete the storage blob
   if (shouldDestroy) {
-    const drop = await getDropByCode(sessionCode);
-    if (drop.data) {
-      await supabase.storage
-        .from(PHANTOM_CONFIG.STORAGE_BUCKET)
-        .remove([drop.data.storage_path]);
-    }
+    await supabase.storage
+      .from(PHANTOM_CONFIG.STORAGE_BUCKET)
+      .remove([drop.storage_path]);
   }
 }
 // --- Clipboard Sessions (Database limit enforcement) ---
@@ -162,19 +143,15 @@ export async function createClipboardSession(record: ClipboardSessionRecord) {
 
 export async function getClipboardSession(sessionCode: string) {
   const { data, error } = await supabase
-    .from('clipboard_sessions')
-    .select('*')
-    .eq('session_code', sessionCode)
+    .rpc('get_clipboard_session', { p_code: sessionCode })
     .single();
     
-  return { data, error };
+  return { data: data as ClipboardSessionRecord | null, error };
 }
 
 export async function deleteClipboardSession(sessionCode: string) {
   return await supabase
-    .from('clipboard_sessions')
-    .delete()
-    .eq('session_code', sessionCode);
+    .rpc('delete_clipboard_session', { p_code: sessionCode });
 }
 /** Delete a drop completely — handles single-file and multi-file groups */
 export async function destroyDrop(sessionCode: string): Promise<void> {
@@ -184,31 +161,19 @@ export async function destroyDrop(sessionCode: string): Promise<void> {
     await supabase.storage
       .from(PHANTOM_CONFIG.STORAGE_BUCKET)
       .remove([data.storage_path]);
-    await supabase
-      .from('drops')
-      .update({ is_destroyed: true })
-      .eq('session_code', sessionCode);
   }
   
   // Also destroy any multi-file group members
-  const { data: groupDrops } = await supabase
-    .from('drops')
-    .select('session_code, storage_path')
-    .eq('group_code', sessionCode)
-    .eq('is_destroyed', false);
+  const { data: groupDrops } = await getDropsByLookupCode(sessionCode);
   
   if (groupDrops && groupDrops.length > 0) {
     const paths = groupDrops.map(d => d.storage_path);
     await supabase.storage
       .from(PHANTOM_CONFIG.STORAGE_BUCKET)
       .remove(paths);
-    
-    const codes = groupDrops.map(d => d.session_code);
-    await supabase
-      .from('drops')
-      .update({ is_destroyed: true })
-      .in('session_code', codes);
   }
+
+  await supabase.rpc('destroy_drop_by_code', { p_code: sessionCode });
 }
 
 // ─── Secure Text Operations ─────────────────────────────────
@@ -236,41 +201,19 @@ export async function createSecureText(text: {
 /** Fetch a secure text by session code */
 export async function getSecureTextByCode(code: string): Promise<{ data: SecureTextRecord | null; error: Error | null }> {
   const { data, error } = await supabase
-    .from('secure_texts')
-    .select('*')
-    .eq('session_code', code)
+    .rpc('get_secure_text_by_code', { p_code: code })
     .single();
-  return { data, error: error ? new Error(error.message) : null };
+  return { data: data as SecureTextRecord | null, error: error ? new Error(error.message) : null };
 }
 
 /** Record a text view and optionally destroy */
 export async function recordTextView(sessionCode: string, burnAfterReading: boolean): Promise<void> {
-  const { data } = await supabase
-    .from('secure_texts')
-    .select('view_count, max_views')
-    .eq('session_code', sessionCode)
-    .single();
-
-  if (!data) return;
-
-  const newCount = (data.view_count || 0) + 1;
-  const shouldDestroy = burnAfterReading || (data.max_views && newCount >= data.max_views);
-
-  await supabase
-    .from('secure_texts')
-    .update({
-      view_count: newCount,
-      is_destroyed: shouldDestroy || false,
-    })
-    .eq('session_code', sessionCode);
+  await supabase.rpc('record_text_view', { p_code: sessionCode, p_burn: burnAfterReading });
 }
 
 /** Delete a secure text completely */
 export async function destroySecureText(sessionCode: string): Promise<void> {
-  await supabase
-    .from('secure_texts')
-    .update({ is_destroyed: true })
-    .eq('session_code', sessionCode);
+  await supabase.rpc('destroy_text_by_code', { p_code: sessionCode });
 }
 
 // ─── Targeted Expiry Cleanup ─────────────────────────────────
@@ -282,19 +225,13 @@ export async function destroyExpiredDrop(sessionCode: string): Promise<void> {
     await supabase.storage
       .from(PHANTOM_CONFIG.STORAGE_BUCKET)
       .remove([data.storage_path]);
-    await supabase
-      .from('drops')
-      .update({ is_destroyed: true })
-      .eq('session_code', sessionCode);
+    await supabase.rpc('destroy_drop_by_code', { p_code: sessionCode });
   }
 }
 
 /** Destroy a specific expired text (called from receiver when expiry detected) */
 export async function destroyExpiredText(sessionCode: string): Promise<void> {
-  await supabase
-    .from('secure_texts')
-    .update({ is_destroyed: true })
-    .eq('session_code', sessionCode);
+  await supabase.rpc('destroy_text_by_code', { p_code: sessionCode });
 }
 
 // ─── Cleanup ─────────────────────────────────────────────────

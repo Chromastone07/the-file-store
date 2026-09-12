@@ -27,7 +27,7 @@ export default function CountdownTimer({ expiresAt, size = 'md', onExpired }: Co
     return () => clearInterval(timer);
   }, [expiresAt, onExpired]);
 
-  const isUrgent = !timeLeft.expired && timeLeft.totalSeconds <= 30;
+  const isUrgent = !timeLeft.expired && timeLeft.totalSeconds <= 60;
 
   return (
     <motion.div 
@@ -37,7 +37,7 @@ export default function CountdownTimer({ expiresAt, size = 'md', onExpired }: Co
         timeLeft.expired 
           ? 'bg-[var(--phantom-danger)]/10 border-[var(--phantom-danger)]/50 text-[var(--phantom-danger)]'
           : isUrgent
-            ? 'bg-[var(--phantom-warning)]/10 border-[var(--phantom-warning)]/50 text-[var(--phantom-warning)]'
+            ? 'bg-[var(--phantom-danger)]/10 border-[var(--phantom-danger)]/50 text-[var(--phantom-danger)]'
             : 'bg-[var(--phantom-elevated)] border-[var(--phantom-border)] text-[var(--phantom-text)]'
       }`}
     >

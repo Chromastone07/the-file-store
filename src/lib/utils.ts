@@ -2,13 +2,15 @@
 
 // ─── File Categories ─────────────────────────────────────────
 
-export type FileCategory = 'image' | 'video' | 'pdf' | 'code' | 'document' | 'archive' | 'presentation' | 'spreadsheet' | 'other';
+export type FileCategory = 'image' | 'video' | 'audio' | 'pdf' | 'code' | 'document' | 'archive' | 'presentation' | 'spreadsheet' | 'other';
 
 const FILE_CATEGORIES: Record<string, FileCategory> = {
   // Images
   jpg: 'image', jpeg: 'image', png: 'image', gif: 'image', webp: 'image', svg: 'image', bmp: 'image', ico: 'image', avif: 'image',
   // Video
   mp4: 'video', webm: 'video', mov: 'video', avi: 'video', mkv: 'video', m4v: 'video',
+  // Audio
+  mp3: 'audio', wav: 'audio', ogg: 'audio', flac: 'audio', m4a: 'audio', aac: 'audio',
   // PDF
   pdf: 'pdf',
   // Code
@@ -43,7 +45,7 @@ export function getFileExtension(filename: string): string {
 /** Check if a file can be previewed in-browser */
 export function isPreviewable(filename: string): boolean {
   const category = getFileCategory(filename);
-  return ['image', 'video', 'pdf', 'code', 'document'].includes(category);
+  return ['image', 'video', 'audio', 'pdf', 'code', 'document', 'spreadsheet', 'presentation'].includes(category);
 }
 
 // ─── Prism.js Language Mapping ───────────────────────────────
@@ -119,6 +121,7 @@ export function getTimeRemaining(expiresAt: string): {
 const CATEGORY_LABELS: Record<FileCategory, string> = {
   image: 'Image',
   video: 'Video',
+  audio: 'Audio',
   pdf: 'PDF',
   code: 'Code',
   document: 'Document',
@@ -165,8 +168,6 @@ export function expiryFromSeconds(seconds: number): string {
 
 /** Sanitize filename — remove identifying patterns */
 export function sanitizeFilename(name: string): string {
-  // Keep extension, randomize the rest
-  const ext = name.split('.').pop() || '';
-  const id = Math.random().toString(36).substring(2, 8);
-  return ext ? `phantom_${id}.${ext}` : `phantom_${id}`;
+  // Return original filename to preserve identity as requested
+  return name;
 }

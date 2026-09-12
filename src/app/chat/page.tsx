@@ -13,13 +13,18 @@ import { toast } from 'sonner';
 
 export default function ClipboardPage() {
   const { 
-    clipboardConfig, 
-    clipboardConnected, 
-    clipboardHistory, 
-    connectToClipboard, 
-    sendClipboardMessage, 
-    leaveClipboardSession 
+    activeSessions,
+    chatHistories, 
+    connectToChat, 
+    sendChatMessage,
+    removeActiveSession
   } = useGlobalSession();
+
+  const searchParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+  const activeChatId = searchParams?.get('join');
+  
+  const activeChatSession = activeSessions.find(s => s.id === activeChatId && s.type === 'chat') as any;
+  const chatHistory = activeChatId ? (chatHistories[activeChatId] || []) : [];
 
   const [joinCode, setJoinCode] = useState('');
   const [inputText, setInputText] = useState('');
@@ -33,25 +38,25 @@ export default function ClipboardPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (clipboardConfig?.isCreator) {
-      const url = `${window.location.origin}/clipboard?join=${clipboardConfig.sessionCode}`;
+    if (activeChatSession?.config?.isCreator) {
+      const url = `${window.location.origin}/chat?join=${activeChatSession.config.sessionCode}`;
       QRCode.toDataURL(url, {
         color: { dark: '#e2e8f0', light: '#0d0d1a' }, margin: 2
       }).then(setQrUrl).catch(console.error);
     }
-  }, [clipboardConfig]);
+  }, [activeChatSession]);
 
   useEffect(() => {
     // Auto scroll to bottom
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [clipboardHistory]);
+  }, [chatHistory]);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const joinCodeParam = urlParams.get('join');
-    if (joinCodeParam && !clipboardConfig) {
+    if (joinCodeParam && !activeSessions.some(s => s.id === joinCodeParam)) {
       setJoinCode(joinCodeParam);
       handleJoin(joinCodeParam);
     }
@@ -74,12 +79,15 @@ export default function ClipboardPage() {
 
       if (error) throw error;
 
-      connectToClipboard({
+      connectToChat({
         sessionCode: code,
         maxUsers,
         expiresAt,
         isCreator: true
       });
+      
+      // Auto-navigate to the new session
+      window.history.pushState({}, '', `/chat?join=${code}`);
       
     } catch (err) {
       toast.error('Failed to create session');
@@ -106,12 +114,14 @@ export default function ClipboardPage() {
         return;
       }
 
-      connectToClipboard({
+      connectToChat({
         sessionCode: code,
         maxUsers: data.max_users,
         expiresAt: new Date(data.expires_at),
         isCreator: false
       });
+      
+      window.history.pushState({}, '', `/chat?join=${code}`);
 
     } catch (err) {
       toast.error('Error joining session');
@@ -122,20 +132,20 @@ export default function ClipboardPage() {
 
   const handleSend = (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!inputText.trim()) return;
-    sendClipboardMessage(inputText);
+    if (!inputText.trim() || !activeChatId) return;
+    sendChatMessage(activeChatId, inputText);
     setInputText('');
   };
 
   const handleLeave = async () => {
-    if (clipboardConfig?.isCreator) {
+    if (!activeChatId) return;
+    if (activeChatSession?.config?.isCreator) {
       try {
-        await deleteClipboardSession(clipboardConfig.sessionCode);
-      } catch (e) {
-        // Ignored
-      }
+        await deleteClipboardSession(activeChatId);
+      } catch (e) {}
     }
-    leaveClipboardSession();
+    removeActiveSession(activeChatId);
+    window.history.pushState({}, '', '/chat');
   };
 
   const copyToClipboard = (text: string) => {
@@ -154,7 +164,7 @@ export default function ClipboardPage() {
           animate={{ opacity: 1, y: 0 }}
           className="w-full max-w-5xl flex flex-col h-full"
         >
-          {!clipboardConfig ? (
+          {!activeChatSession ? (
             <div className="w-full flex flex-col gap-8 max-w-4xl mx-auto py-12">
               <div className="text-center">
                 <h1 className="text-3xl md:text-5xl font-bold tracking-tight text-[var(--phantom-text)] mb-3">
@@ -257,13 +267,13 @@ export default function ClipboardPage() {
                 <div className="flex items-center gap-4">
                   <div className="flex flex-col">
                     <div className="flex items-center gap-2">
-                      <div className={`w-2.5 h-2.5 rounded-full ${clipboardConnected ? 'bg-[var(--phantom-success)] shadow-[0_0_8px_var(--phantom-success)]' : 'bg-[var(--phantom-warning)] animate-pulse'}`}></div>
+                      <div className={`w-2.5 h-2.5 rounded-full ${activeChatSession.connected ? 'bg-[var(--phantom-success)] shadow-[0_0_8px_var(--phantom-success)]' : 'bg-[var(--phantom-warning)] animate-pulse'}`}></div>
                       <span className="font-bold text-[var(--phantom-text)] flex items-center gap-2">
-                        Session: <span className="font-mono tracking-widest text-[var(--phantom-glow)]">{clipboardConfig.sessionCode}</span>
+                        Session: <span className="font-mono tracking-widest text-[var(--phantom-glow)]">{activeChatSession.config.sessionCode}</span>
                       </span>
                     </div>
                     <span className="text-xs text-[var(--phantom-muted)] flex items-center gap-1 mt-1">
-                      <Users className="w-3 h-3" /> Max {clipboardConfig.maxUsers}
+                      <Users className="w-3 h-3" /> Max {activeChatSession.config.maxUsers}
                     </span>
                   </div>
                 </div>
@@ -273,7 +283,7 @@ export default function ClipboardPage() {
                   className="flex items-center gap-2 px-4 py-2 bg-[var(--phantom-danger)] hover:bg-[var(--phantom-danger)]/80 text-white text-sm font-medium rounded-lg transition-colors"
                 >
                   <LogOut className="w-4 h-4" />
-                  <span className="hidden sm:inline">{clipboardConfig.isCreator ? 'Destroy Room' : 'Leave'}</span>
+                  <span className="hidden sm:inline">{activeChatSession.config.isCreator ? 'Destroy Room' : 'Leave'}</span>
                 </button>
               </div>
 
@@ -281,7 +291,7 @@ export default function ClipboardPage() {
               <div className="flex flex-col md:flex-row flex-grow overflow-hidden">
                 
                 {/* Optional Sidebar for QR / Metadata if Creator */}
-                {clipboardConfig.isCreator && (
+                {activeChatSession.config.isCreator && (
                   <div className="hidden md:flex flex-col w-64 border-r border-[var(--phantom-border)] bg-[var(--phantom-elevated)]/30 p-6">
                     <h3 className="font-semibold text-sm uppercase tracking-wider text-[var(--phantom-muted)] mb-4 flex items-center gap-2">
                       <Smartphone className="w-4 h-4" /> Invite
@@ -294,7 +304,7 @@ export default function ClipboardPage() {
                       <div className="w-32 h-32 bg-[var(--phantom-border)] animate-pulse rounded-xl self-center mb-4"></div>
                     )}
                     <button 
-                      onClick={() => copyToClipboard(`${window.location.origin}/clipboard?join=${clipboardConfig.sessionCode}`)}
+                      onClick={() => copyToClipboard(`${window.location.origin}/chat?join=${activeChatSession.config.sessionCode}`)}
                       className="text-xs bg-[var(--phantom-surface)] border border-[var(--phantom-border)] hover:bg-[var(--phantom-elevated)] transition-colors py-2 rounded-lg flex items-center justify-center gap-2"
                     >
                       <Copy className="w-3 h-3" /> Copy Link
@@ -306,13 +316,13 @@ export default function ClipboardPage() {
                 <div className="flex flex-col flex-grow relative bg-[var(--phantom-surface)]/50">
                   {/* Messages */}
                   <div className="flex-grow overflow-y-auto p-4 sm:p-6 space-y-4 custom-scrollbar">
-                    {clipboardHistory.length === 0 ? (
+                    {chatHistory.length === 0 ? (
                       <div className="h-full flex flex-col items-center justify-center text-[var(--phantom-muted)] opacity-70">
                         <Shield className="w-12 h-12 mb-4 text-[var(--phantom-border)]" />
                         <p className="text-sm text-center max-w-xs">End-to-end encrypted chat. Messages are never stored on the server. Navigating away keeps the session active.</p>
                       </div>
                     ) : (
-                      clipboardHistory.map((msg) => (
+                      chatHistory.map((msg: any) => (
                         <div 
                           key={msg.id} 
                           className={`flex ${msg.type === 'system' ? 'justify-center' : msg.type === 'sent' ? 'justify-end' : 'justify-start'}`}
@@ -356,15 +366,15 @@ export default function ClipboardPage() {
                             handleSend();
                           }
                         }}
-                        disabled={!clipboardConnected}
-                        placeholder={clipboardConnected ? "Type a secure message..." : "Waiting for connection..."}
+                        disabled={!activeChatSession.connected}
+                        placeholder={activeChatSession.connected ? "Type a secure message..." : "Waiting for connection..."}
                         className="flex-grow bg-[var(--phantom-elevated)] border border-[var(--phantom-border)] rounded-2xl px-4 py-3 text-sm sm:text-base text-[var(--phantom-text)] focus:outline-none focus:border-[var(--phantom-glow)] transition-colors resize-none max-h-32 min-h-[44px]"
                         rows={1}
                         style={{ height: 'auto' }}
                       />
                       <button
                         type="submit"
-                        disabled={!clipboardConnected || !inputText.trim()}
+                        disabled={!activeChatSession.connected || !inputText.trim()}
                         className="bg-[var(--phantom-glow)] hover:bg-[var(--phantom-accent)] text-white p-3.5 rounded-2xl transition-all disabled:opacity-50 disabled:scale-100 hover:scale-105 active:scale-95 flex-shrink-0 shadow-md"
                       >
                         <Send className="w-5 h-5 ml-1" />

@@ -1,6 +1,6 @@
 import { Toaster } from 'sonner';
 import { GlobalSessionProvider } from '@/context/GlobalSessionContext';
-import FloatingSessionWidget from '@/components/ui/FloatingSessionWidget';
+import SessionDock from '@/components/ui/SessionDock';
 import './globals.css';
 
 export const metadata = {
@@ -17,7 +17,7 @@ export const metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning data-scroll-behavior="smooth">
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
@@ -29,19 +29,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="antialiased bg-[var(--phantom-bg)] text-[var(--phantom-text)] min-h-screen flex flex-col">
         <GlobalSessionProvider>
           {children}
-          <FloatingSessionWidget />
-          <Toaster
-          position="bottom-right"
-          richColors
-          closeButton
-          toastOptions={{
-            style: {
-              background: 'var(--phantom-surface)',
-              border: '1px solid var(--phantom-border)',
-              color: 'var(--phantom-text)',
-            },
-          }}
-        />
+          <SessionDock />
+          <Toaster 
+            position="top-center"
+            toastOptions={{
+              className: 'bg-[var(--phantom-elevated)] border-[var(--phantom-border)] text-[var(--phantom-text)]',
+              style: {
+                backdropFilter: 'blur(10px)',
+              }
+            }}
+          />
         </GlobalSessionProvider>
       </body>
     </html>

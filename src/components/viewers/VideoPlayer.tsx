@@ -6,9 +6,10 @@ interface VideoPlayerProps {
   src: string;       // blob URL of decrypted video
   filename: string;
   viewOnly?: boolean;
+  onEnded?: () => void;
 }
 
-export default function VideoPlayer({ src, filename, viewOnly = false }: VideoPlayerProps) {
+export default function VideoPlayer({ src, filename, viewOnly = false, onEnded }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -25,20 +26,23 @@ export default function VideoPlayer({ src, filename, viewOnly = false }: VideoPl
     const onLoadedMetadata = () => setDuration(video.duration);
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
-    const onEnded = () => setIsPlaying(false);
+    const handleEnded = () => {
+      setIsPlaying(false);
+      onEnded?.();
+    };
 
     video.addEventListener('timeupdate', onTimeUpdate);
     video.addEventListener('loadedmetadata', onLoadedMetadata);
     video.addEventListener('play', onPlay);
     video.addEventListener('pause', onPause);
-    video.addEventListener('ended', onEnded);
+    video.addEventListener('ended', handleEnded);
 
     return () => {
       video.removeEventListener('timeupdate', onTimeUpdate);
       video.removeEventListener('loadedmetadata', onLoadedMetadata);
       video.removeEventListener('play', onPlay);
       video.removeEventListener('pause', onPause);
-      video.removeEventListener('ended', onEnded);
+      video.removeEventListener('ended', handleEnded);
     };
   }, []);
 

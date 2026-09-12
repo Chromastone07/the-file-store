@@ -11,25 +11,31 @@ export interface UploadResult {
   shareLink: string;
   keyBase64: string;
   expiresAt: string;
-  filenames?: string[]; // Added this so we can show filenames on the success screen
+  filenames?: string[];
 }
 
-export interface ClipboardMessage {
+export interface ChatMessage {
   id: string;
   text: string;
   type: 'sent' | 'received' | 'system';
   timestamp: Date;
 }
 
-export interface ClipboardSessionConfig {
+export interface ChatSessionConfig {
   sessionCode: string;
   maxUsers: number;
   expiresAt: Date;
   isCreator: boolean;
 }
 
+// For active sessions tracking
+export type ActiveSession = 
+  | { type: 'drop'; id: string; title: string; files: any[] } // files: DecryptedFile[]
+  | { type: 'text'; id: string; title: string; text: string }
+  | { type: 'chat'; id: string; title: string; config: ChatSessionConfig; connected: boolean };
+
 interface GlobalSessionState {
-  // Drop Session State
+  // Drop Session State (Uploading)
   dropPhase: UploadPhase;
   dropProgress: number;
   dropError: string | null;
@@ -40,7 +46,7 @@ interface GlobalSessionState {
   setDropResult: (result: UploadResult | null) => void;
   resetDrop: () => void;
 
-  // Text Session State
+  // Text Session State (Uploading)
   textPhase: UploadPhase;
   textProgress: number;
   textError: string | null;
@@ -51,178 +57,189 @@ interface GlobalSessionState {
   setTextResult: (result: UploadResult | null) => void;
   resetText: () => void;
 
-  // Clipboard Chat State
-  clipboardConfig: ClipboardSessionConfig | null;
-  clipboardConnected: boolean;
-  clipboardHistory: ClipboardMessage[];
-  connectToClipboard: (config: ClipboardSessionConfig) => void;
-  sendClipboardMessage: (text: string) => void;
-  leaveClipboardSession: () => void;
+  // Global Active Sessions (Dock)
+  activeSessions: ActiveSession[];
+  addActiveSession: (session: ActiveSession) => void;
+  removeActiveSession: (id: string) => void;
+
+  // Chat Specifics
+  chatHistories: Record<string, ChatMessage[]>;
+  connectToChat: (config: ChatSessionConfig) => void;
+  sendChatMessage: (sessionId: string, text: string) => void;
+
+  // Session Viewer
+  viewingSessionId: string | null;
+  setViewingSessionId: (id: string | null) => void;
 }
 
 const GlobalSessionContext = createContext<GlobalSessionState | undefined>(undefined);
 
 export function GlobalSessionProvider({ children }: { children: React.ReactNode }) {
-  // --- Drop State ---
+  // --- Upload States ---
   const [dropPhase, setDropPhase] = useState<UploadPhase>('idle');
   const [dropProgress, setDropProgress] = useState(0);
   const [dropError, setDropError] = useState<string | null>(null);
   const [dropResult, setDropResult] = useState<UploadResult | null>(null);
+  const resetDrop = useCallback(() => { setDropPhase('idle'); setDropProgress(0); setDropError(null); setDropResult(null); }, []);
 
-  const resetDrop = useCallback(() => {
-    setDropPhase('idle');
-    setDropProgress(0);
-    setDropError(null);
-    setDropResult(null);
-  }, []);
-
-  // --- Text State ---
   const [textPhase, setTextPhase] = useState<UploadPhase>('idle');
   const [textProgress, setTextProgress] = useState(0);
   const [textError, setTextError] = useState<string | null>(null);
   const [textResult, setTextResult] = useState<UploadResult | null>(null);
+  const resetText = useCallback(() => { setTextPhase('idle'); setTextProgress(0); setTextError(null); setTextResult(null); }, []);
 
-  const resetText = useCallback(() => {
-    setTextPhase('idle');
-    setTextProgress(0);
-    setTextError(null);
-    setTextResult(null);
+  // --- Active Sessions & Chat ---
+  const [activeSessions, setActiveSessions] = useState<ActiveSession[]>([]);
+  const [viewingSessionId, setViewingSessionId] = useState<string | null>(null);
+  const [chatHistories, setChatHistories] = useState<Record<string, ChatMessage[]>>({});
+  const channelsRef = useRef<Record<string, any>>({});
+
+  const addActiveSession = useCallback((session: ActiveSession) => {
+    setActiveSessions(prev => {
+      if (prev.some(s => s.id === session.id)) return prev;
+      return [...prev, session];
+    });
   }, []);
 
-  // Listen to cross-window or cross-component purges
-  useEffect(() => {
-    const handleHistoryChange = () => {
-      try {
-        const stored = localStorage.getItem('phantom_sender_history');
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          
-          if (dropResult) {
-            const dropItem = parsed.find((p: any) => p.rawCode === dropResult.sessionCode);
-            if (dropItem?.isDestroyed) {
-              toast.info('Session purged successfully', { id: `purge-drop` });
-              resetDrop();
-            }
-          }
-          
-          if (textResult) {
-            const textItem = parsed.find((p: any) => p.rawCode === textResult.sessionCode);
-            if (textItem?.isDestroyed) {
-              toast.info('Session purged successfully', { id: `purge-text` });
-              resetText();
-            }
-          }
+  const removeActiveSession = useCallback((id: string) => {
+    setActiveSessions(prev => {
+      const session = prev.find(s => s.id === id);
+      if (!session) return prev;
+      
+      // Cleanup
+      if (id === viewingSessionId) setViewingSessionId(null);
+
+      if (session.type === 'drop') {
+        session.files.forEach(f => {
+          if (f.blobUrl) URL.revokeObjectURL(f.blobUrl);
+        });
+      } else if (session.type === 'chat') {
+        const channel = channelsRef.current[id];
+        if (channel) {
+          supabase.removeChannel(channel);
+          delete channelsRef.current[id];
         }
-      } catch (e) {}
-    };
+        setChatHistories(h => {
+          const newH = { ...h };
+          delete newH[id];
+          return newH;
+        });
+      }
+      return prev.filter(s => s.id !== id);
+    });
+  }, []);
 
-    window.addEventListener('phantom_history_changed', handleHistoryChange);
-    return () => window.removeEventListener('phantom_history_changed', handleHistoryChange);
-  }, [dropResult, textResult, resetDrop, resetText]);
-
-  // --- Clipboard State ---
-  const [clipboardConfig, setClipboardConfig] = useState<ClipboardSessionConfig | null>(null);
-  const [clipboardConnected, setClipboardConnected] = useState(false);
-  const [clipboardHistory, setClipboardHistory] = useState<ClipboardMessage[]>([]);
-  const channelRef = useRef<any>(null);
-
-  const connectToClipboard = useCallback((config: ClipboardSessionConfig) => {
-    if (channelRef.current) {
-      supabase.removeChannel(channelRef.current);
-    }
+  const connectToChat = useCallback((config: ChatSessionConfig) => {
+    const id = config.sessionCode;
     
-    setClipboardConfig(config);
-    setClipboardHistory([]);
+    // Add to active sessions if not there
+    setActiveSessions(prev => {
+      if (prev.some(s => s.id === id)) return prev;
+      return [...prev, { type: 'chat', id, title: 'Secure Chat', config, connected: false }];
+    });
+    
+    setChatHistories(prev => ({ ...prev, [id]: [] }));
 
-    const newChannel = supabase.channel(`clipboard:${config.sessionCode}`);
+    if (channelsRef.current[id]) {
+      supabase.removeChannel(channelsRef.current[id]);
+    }
+
+    const newChannel = supabase.channel(`clipboard:${id}`); // keeping channel name same for DB compatibility if needed
     
     newChannel
       .on('broadcast', { event: 'clipboard' }, (payload) => {
         if (payload.payload?.text) {
-          setClipboardHistory(prev => [...prev, {
-            id: Math.random().toString(36).substring(2, 9),
-            text: payload.payload.text,
-            type: 'received',
-            timestamp: new Date()
-          }]);
+          setChatHistories(prev => ({
+            ...prev,
+            [id]: [...(prev[id] || []), {
+              id: Math.random().toString(36).substring(2, 9),
+              text: payload.payload.text,
+              type: 'received',
+              timestamp: new Date()
+            }]
+          }));
         }
       })
       .on('presence', { event: 'join' }, ({ newPresences }) => {
-        // Enforce max users check locally
         const currentCount = Object.keys(newChannel.presenceState()).length;
         if (currentCount > config.maxUsers) {
           if (!config.isCreator) {
             toast.error('Session is full.');
-            leaveClipboardSession();
+            removeActiveSession(id);
             return;
           }
         }
 
-        setClipboardConnected(true);
+        const newlyJoinedId = newPresences[0]?.user || 'A user';
+        
+        setActiveSessions(prev => prev.map(s => s.id === id && s.type === 'chat' ? { ...s, connected: true } : s));
+
         if (!config.isCreator) {
-          toast.success('Joined secure session.');
+          toast.success('Joined secure chat.');
         } else {
-          toast.success('Peer connected to your session.');
+          toast.success(`${newlyJoinedId} connected.`);
         }
         
-        setClipboardHistory(prev => [...prev, {
-          id: Math.random().toString(36).substring(2, 9),
-          text: 'User joined the secure session.',
-          type: 'system',
-          timestamp: new Date()
-        }]);
+        setChatHistories(prev => ({
+          ...prev,
+          [id]: [...(prev[id] || []), {
+            id: Math.random().toString(36).substring(2, 9),
+            text: `${newlyJoinedId} joined the secure session.`,
+            type: 'system',
+            timestamp: new Date()
+          }]
+        }));
       })
-      .on('presence', { event: 'leave' }, () => {
-        toast.warning('Peer disconnected');
-        setClipboardHistory(prev => [...prev, {
-          id: Math.random().toString(36).substring(2, 9),
-          text: 'User left the session.',
-          type: 'system',
-          timestamp: new Date()
-        }]);
+      .on('presence', { event: 'leave' }, ({ leftPresences }) => {
+        const leftId = leftPresences[0]?.user || 'A user';
+        setChatHistories(prev => ({
+          ...prev,
+          [id]: [...(prev[id] || []), {
+            id: Math.random().toString(36).substring(2, 9),
+            text: `${leftId} left the session.`,
+            type: 'system',
+            timestamp: new Date()
+          }]
+        }));
       })
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
-          await newChannel.track({ online: true, user: config.isCreator ? 'creator' : 'joiner' });
-          if (!config.isCreator) setClipboardConnected(true);
+          const randomId = 'User-' + Math.random().toString(36).substring(2, 6).toUpperCase();
+          await newChannel.track({ online: true, user: randomId });
+          if (!config.isCreator) {
+            setActiveSessions(prev => prev.map(s => s.id === id && s.type === 'chat' ? { ...s, connected: true } : s));
+          }
         }
       });
 
-    channelRef.current = newChannel;
-  }, []);
+    channelsRef.current[id] = newChannel;
+  }, [removeActiveSession]);
 
-  const sendClipboardMessage = useCallback((text: string) => {
-    if (!channelRef.current) return;
+  const sendChatMessage = useCallback((sessionId: string, text: string) => {
+    const channel = channelsRef.current[sessionId];
+    if (!channel) return;
     
-    channelRef.current.send({
+    channel.send({
       type: 'broadcast',
       event: 'clipboard',
       payload: { text }
     });
 
-    setClipboardHistory(prev => [...prev, {
-      id: Math.random().toString(36).substring(2, 9),
-      text,
-      type: 'sent',
-      timestamp: new Date()
-    }]);
-  }, []);
-
-  const leaveClipboardSession = useCallback(() => {
-    if (channelRef.current) {
-      supabase.removeChannel(channelRef.current);
-      channelRef.current = null;
-    }
-    setClipboardConfig(null);
-    setClipboardConnected(false);
-    setClipboardHistory([]);
-    toast.info('Left the secure session.');
+    setChatHistories(prev => ({
+      ...prev,
+      [sessionId]: [...(prev[sessionId] || []), {
+        id: Math.random().toString(36).substring(2, 9),
+        text,
+        type: 'sent',
+        timestamp: new Date()
+      }]
+    }));
   }, []);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (channelRef.current) supabase.removeChannel(channelRef.current);
+      Object.values(channelsRef.current).forEach(ch => supabase.removeChannel(ch));
     };
   }, []);
 
@@ -231,8 +248,9 @@ export function GlobalSessionProvider({ children }: { children: React.ReactNode 
     setDropPhase, setDropProgress, setDropError, setDropResult, resetDrop,
     textPhase, textProgress, textError, textResult,
     setTextPhase, setTextProgress, setTextError, setTextResult, resetText,
-    clipboardConfig, clipboardConnected, clipboardHistory,
-    connectToClipboard, sendClipboardMessage, leaveClipboardSession
+    activeSessions, addActiveSession, removeActiveSession,
+    chatHistories, connectToChat, sendChatMessage,
+    viewingSessionId, setViewingSessionId
   };
 
   return (

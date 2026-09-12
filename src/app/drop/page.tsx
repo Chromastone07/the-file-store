@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useCallback, useRef, DragEvent, ChangeEvent } from 'react';
+import { useState, useCallback, useRef, useEffect, DragEvent, ChangeEvent } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useFileUpload, UploadPhase } from '@/hooks/useFileUpload';
 import { PHANTOM_CONFIG } from '@/lib/config';
 import { formatFileSize, getFileCategory, getCategoryLabel } from '@/lib/utils';
+import { supabase } from '@/lib/supabase';
 import Navbar from '@/components/layout/Navbar';
 import Footer from '@/components/layout/Footer';
 import AnimatedBackground from '@/components/layout/AnimatedBackground';
@@ -30,6 +31,7 @@ export default function DropPage() {
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
   const [fileError, setFileError] = useState('');
+  const [isDestroyed, setIsDestroyed] = useState(false);
 
   const { uploadFile, destructDrop, phase, progress, result, reset, error } = useFileUpload();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -98,10 +100,54 @@ export default function DropPage() {
         });
         setQrDataUrl(qrUrl);
       }
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      setFileError(err.message || 'Upload failed');
     }
   };
+
+  useEffect(() => {
+    if (phase !== 'done' || !result?.sessionCode) return;
+    
+    // Poll for destruction every 5 seconds as fallback
+    const pollInterval = setInterval(async () => {
+      try {
+        const { hashString } = await import('@/lib/crypto');
+        const dbLookupCode = await hashString(result.sessionCode);
+        const { data } = await supabase
+          .rpc('get_drops_by_lookup_code', { p_code: dbLookupCode });
+        
+        // If no rows exist, or if ALL files in the group are destroyed
+        if (!data || data.length === 0 || data.every(d => d.is_destroyed)) {
+          setIsDestroyed(true);
+        }
+      } catch (e) {}
+    }, 5000);
+
+    // Real-time listener setup using an async function to get the hash
+    let channel: any;
+    const setupListener = async () => {
+      const { hashString } = await import('@/lib/crypto');
+      const dbLookupCode = await hashString(result.sessionCode);
+      
+      channel = supabase
+        .channel(`drop-watch-${dbLookupCode}`)
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'drops', filter: `session_code=eq.${dbLookupCode}` },
+          (payload: any) => {
+            if (payload.new?.is_destroyed) setIsDestroyed(true);
+          }
+        )
+        .subscribe();
+    };
+    
+    setupListener();
+
+    return () => {
+      clearInterval(pollInterval);
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, [phase, result]);
 
   const copyToClipboard = (text: string, type: 'link' | 'code') => {
     navigator.clipboard.writeText(text);
@@ -300,7 +346,7 @@ export default function DropPage() {
                         <div className="flex items-center justify-between py-2 border-b border-[var(--phantom-border)]/50">
                           <div>
                             <div className="font-medium">Burn after reading</div>
-                            <div className="text-sm text-[var(--phantom-muted)]">File is destroyed after first access</div>
+                            <div className="text-sm text-[var(--phantom-muted)]">File is permanently deleted after first view (One-time link)</div>
                           </div>
                           <label className="relative inline-flex items-center cursor-pointer">
                             <input type="checkbox" className="sr-only peer" checked={burnAfterReading} onChange={() => setBurnAfterReading(!burnAfterReading)} />
@@ -408,12 +454,43 @@ export default function DropPage() {
             )}
 
             {phase === 'done' && result && (
-              <motion.div
-                key="done"
-                initial={{ opacity: 0, y: 30 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ type: "spring", stiffness: 300, damping: 25 }}
-              >
+              <AnimatePresence mode="wait">
+                {isDestroyed ? (
+                  <motion.div
+                    key="destroyed"
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                    transition={{ type: "spring", stiffness: 200, damping: 20 }}
+                  >
+                    <SpotlightCard className="p-12 flex flex-col items-center gap-6 text-center">
+                      <div className="w-20 h-20 bg-[var(--phantom-danger)]/10 rounded-full flex items-center justify-center text-[var(--phantom-danger)]">
+                        <Bomb className="w-10 h-10" />
+                      </div>
+                      <div>
+                        <h2 className="text-2xl font-bold text-[var(--phantom-text)] mb-2">Drop Destroyed</h2>
+                        <p className="text-[var(--phantom-muted)] max-w-sm mx-auto">This secure drop no longer exists. It has been successfully wiped from the server.</p>
+                      </div>
+                      <button 
+                        onClick={() => {
+                          setIsDestroyed(false);
+                          reset();
+                          setFiles([]);
+                        }}
+                        className="mt-4 px-6 py-2 bg-[var(--phantom-elevated)] hover:bg-[var(--phantom-border)] border border-[var(--phantom-border)] rounded-full text-[var(--phantom-text)] transition-colors"
+                      >
+                        Drop another file
+                      </button>
+                    </SpotlightCard>
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="done"
+                    initial={{ opacity: 0, y: 30 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -30 }}
+                    transition={{ type: "spring", stiffness: 300, damping: 25 }}
+                  >
                 <SpotlightCard className="p-8 space-y-8">
                   <motion.div 
                     initial={{ scale: 0 }} 
@@ -516,6 +593,7 @@ export default function DropPage() {
                         onClick={async () => {
                           try {
                             await destructDrop(result.sessionCode);
+                            setIsDestroyed(true);
                           } catch (err) {
                             console.error('Failed to destroy session.');
                           }
@@ -538,6 +616,8 @@ export default function DropPage() {
                   </div>
                 </SpotlightCard>
               </motion.div>
+                )}
+              </AnimatePresence>
             )}
           </AnimatePresence>
         </motion.div>
