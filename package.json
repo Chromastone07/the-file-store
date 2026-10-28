@@ -13,6 +13,8 @@
     "@types/dompurify": "^3.0.5",
     "@types/prismjs": "^1.26.6",
     "@types/qrcode": "^1.5.6",
+    "@vercel/analytics": "^2.0.1",
+    "@vercel/speed-insights": "^2.0.0",
     "dompurify": "^3.4.15",
     "fflate": "^0.8.3",
     "framer-motion": "^13.1.0",

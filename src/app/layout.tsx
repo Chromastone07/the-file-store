@@ -1,6 +1,8 @@
 import type { Viewport, Metadata } from 'next';
 import { Outfit, JetBrains_Mono } from 'next/font/google';
 import { Toaster } from 'sonner';
+import { Analytics } from '@vercel/analytics/next';
+import { SpeedInsights } from '@vercel/speed-insights/next';
 import { GlobalSessionProvider } from '@/context/GlobalSessionContext';
 import SessionDock from '@/components/ui/SessionDock';
 import MobileTabBar from '@/components/layout/MobileTabBar';
@@ -70,6 +72,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <SessionDock />
           <MobileTabBar />
           <PWAInstaller />
+          <Analytics />
+          <SpeedInsights />
           <Toaster 
             position="bottom-center"
             offset="76px"
