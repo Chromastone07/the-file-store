@@ -96,7 +96,7 @@ export default function CapacityOverloadScreen({
         </div>
 
         {/* Headline in Outfit */}
-        <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white mb-2.5">
+        <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-[var(--wisp-text)] mb-2.5">
           Vaults Temporarily at Peak Capacity
         </h2>
 

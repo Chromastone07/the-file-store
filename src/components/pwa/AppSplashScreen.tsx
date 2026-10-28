@@ -8,8 +8,12 @@ export default function AppSplashScreen() {
   const [isVisible, setIsVisible] = useState(true);
 
   useEffect(() => {
-    // Only show splash screen once per session for instant snappiness
+    // Only show splash screen once per session for instant snappiness, unless ?splash=1 is provided for preview
     if (typeof window !== "undefined") {
+      if (window.location.search.includes("splash")) {
+        // Keep splash screen visible for inspection/preview
+        return;
+      }
       const shown = sessionStorage.getItem("phantom_splash_shown");
       if (shown) {
         const hideTimer = setTimeout(() => setIsVisible(false), 0);
@@ -59,7 +63,7 @@ export default function AppSplashScreen() {
                 initial={{ scale: 0.85, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 transition={{ duration: 0.45, ease: "easeOut" }}
-                className="w-24 h-24 rounded-3xl bg-gradient-to-br from-[#0e101a] to-[#040508] border border-cyan-400/30 p-2 shadow-[0_0_40px_rgba(34,211,238,0.25)] flex items-center justify-center relative overflow-hidden"
+                className="w-24 h-24 rounded-3xl border border-cyan-400/40 shadow-[0_0_40px_rgba(34,211,238,0.3)] relative overflow-hidden flex items-center justify-center"
               >
                 <Image
                   src="/icons/icon-192.png"
@@ -67,7 +71,7 @@ export default function AppSplashScreen() {
                   width={96}
                   height={96}
                   priority
-                  className="w-full h-full object-contain drop-shadow-[0_0_15px_rgba(34,211,238,0.6)]"
+                  className="w-full h-full object-cover"
                 />
               </motion.div>
             </div>

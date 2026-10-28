@@ -23,7 +23,7 @@
       </linearGradient>
 
       <filter id="neonGlow" x="-30%" y="-30%" width="160%" height="160%">
-        <feGaussianBlur stdDeviation="17.92" result="blur"/>
+        <feGaussianBlur stdDeviation="16" result="blur"/>
         <feMerge>
           <feMergeNode in="blur"/>
           <feMergeNode in="SourceGraphic"/>
@@ -41,10 +41,10 @@
     <rect width="512" height="512" fill="url(#bgVoid)"/>
 
     <!-- Subtle Ambient Radial Aura behind ghost -->
-    <circle cx="256" cy="256" r="215.04" fill="url(#ambientAura)"/>
+    <circle cx="256" cy="256" r="215" fill="url(#ambientAura)"/>
 
     <!-- Scaled Ghost Artwork centered in the safe zone -->
-    <g transform="translate(256, 256) scale(0.88) translate(-256, -256)">
+    <g transform="translate(256, 256) scale(0.68) translate(-256, -256)">
       <!-- Outer Geometric Orbital Ring -->
       <circle cx="256" cy="256" r="168" fill="none" stroke="#22d3ee" stroke-width="2" stroke-dasharray="8 12" opacity="0.3"/>
       <circle cx="256" cy="256" r="192" fill="none" stroke="#6366f1" stroke-width="1.2" opacity="0.2"/>

@@ -8,15 +8,12 @@ if (!fs.existsSync(outDir)) {
 }
 
 // FULL BLEED - NO PRE-CLIPPED CORNERS (Prevents Android from painting white triangles on corners)
-const createGhostSvg = (size = 512, isMaskable = false) => {
-  // For maskable, safe zone is inner 80%.
-  // Scale the inner artwork appropriately
-  const scale = isMaskable ? 0.78 : 0.88;
-  const cx = size / 2;
-  const cy = size / 2;
+const createGhostSvg = (isMaskable = false) => {
+  // Generous safe-zone margin (0.68 / 0.60) so the ghost never touches or clips at rounded squircle corners
+  const scale = isMaskable ? 0.60 : 0.68;
 
   return `
-  <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
+  <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
     <defs>
       <!-- Deep dark void background matching Phantom's dark mode (#07080f) -->
       <linearGradient id="bgVoid" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -40,7 +37,7 @@ const createGhostSvg = (size = 512, isMaskable = false) => {
       </linearGradient>
 
       <filter id="neonGlow" x="-30%" y="-30%" width="160%" height="160%">
-        <feGaussianBlur stdDeviation="${size * 0.035}" result="blur"/>
+        <feGaussianBlur stdDeviation="16" result="blur"/>
         <feMerge>
           <feMergeNode in="blur"/>
           <feMergeNode in="SourceGraphic"/>
@@ -55,13 +52,13 @@ const createGhostSvg = (size = 512, isMaskable = false) => {
     </defs>
 
     <!-- FULL BLEED BACKGROUND (0 radius, fills 100% of canvas so Android launcher mask never sees transparent corners) -->
-    <rect width="${size}" height="${size}" fill="url(#bgVoid)"/>
+    <rect width="512" height="512" fill="url(#bgVoid)"/>
 
     <!-- Subtle Ambient Radial Aura behind ghost -->
-    <circle cx="${cx}" cy="${cy}" r="${size * 0.42}" fill="url(#ambientAura)"/>
+    <circle cx="256" cy="256" r="215" fill="url(#ambientAura)"/>
 
     <!-- Scaled Ghost Artwork centered in the safe zone -->
-    <g transform="translate(${cx}, ${cy}) scale(${scale}) translate(-256, -256)">
+    <g transform="translate(256, 256) scale(${scale}) translate(-256, -256)">
       <!-- Outer Geometric Orbital Ring -->
       <circle cx="256" cy="256" r="168" fill="none" stroke="#22d3ee" stroke-width="2" stroke-dasharray="8 12" opacity="0.3"/>
       <circle cx="256" cy="256" r="192" fill="none" stroke="#6366f1" stroke-width="1.2" opacity="0.2"/>
@@ -93,38 +90,37 @@ async function generateAll() {
   console.log('Generating full-bleed, corner-safe PWA icons...');
 
   // Standard 512x512
-  const svg512 = createGhostSvg(512, false);
-  await sharp(Buffer.from(svg512)).png().toFile(path.join(outDir, 'icon-512.png'));
-  console.log('✓ icon-512.png (Full bleed, 0 radius)');
+  const svg512 = createGhostSvg(false);
+  const baseImg = sharp(Buffer.from(svg512));
+
+  await baseImg.clone().resize(512, 512).png().toFile(path.join(outDir, 'icon-512.png'));
+  console.log('✓ icon-512.png');
 
   // Standard 192x192
-  const svg192 = createGhostSvg(192, false);
-  await sharp(Buffer.from(svg192)).png().toFile(path.join(outDir, 'icon-192.png'));
-  console.log('✓ icon-192.png (Full bleed, 0 radius)');
+  await baseImg.clone().resize(192, 192).png().toFile(path.join(outDir, 'icon-192.png'));
+  console.log('✓ icon-192.png');
 
   // Maskable 512x512 (Safe-zone centered so Android circle/squircle masks never clip)
-  const svgMaskable = createGhostSvg(512, true);
-  await sharp(Buffer.from(svgMaskable)).png().toFile(path.join(outDir, 'icon-maskable-512.png'));
+  const svgMaskable = createGhostSvg(true);
+  await sharp(Buffer.from(svgMaskable)).resize(512, 512).png().toFile(path.join(outDir, 'icon-maskable-512.png'));
   console.log('✓ icon-maskable-512.png (Full bleed safe-zone)');
 
   // 180x180 Apple Touch Icon
-  const svg180 = createGhostSvg(180, false);
-  await sharp(Buffer.from(svg180)).png().toFile(path.join(outDir, 'apple-touch-icon.png'));
+  await baseImg.clone().resize(180, 180).png().toFile(path.join(outDir, 'apple-touch-icon.png'));
   console.log('✓ apple-touch-icon.png');
 
   // Favicons
-  const svg32 = createGhostSvg(32, false);
-  await sharp(Buffer.from(svg32)).png().toFile(path.join(outDir, 'favicon-32.png'));
-  await sharp(Buffer.from(svg32)).png().toFile(path.join(outDir, 'favicon-16.png'));
-  await sharp(Buffer.from(createGhostSvg(48, false))).png().toFile(path.join(outDir, 'favicon-48.png'));
-  await sharp(Buffer.from(createGhostSvg(48, false))).png().toFile(path.join(__dirname, '..', 'public', 'favicon.png'));
+  await baseImg.clone().resize(48, 48).png().toFile(path.join(outDir, 'favicon-48.png'));
+  await baseImg.clone().resize(48, 48).png().toFile(path.join(__dirname, '..', 'public', 'favicon.png'));
+  await baseImg.clone().resize(32, 32).png().toFile(path.join(outDir, 'favicon-32.png'));
+  await baseImg.clone().resize(16, 16).png().toFile(path.join(outDir, 'favicon-16.png'));
   console.log('✓ Favicons updated');
 
-  // Also update public/logo-options/option2-ghost.png so preview reflects full bleed
-  await sharp(Buffer.from(svg512)).png().toFile(path.join(__dirname, '..', 'public', 'logo-options', 'option2-ghost.png'));
+  // Also update public/logo-options/option2-ghost.png and svg
+  await baseImg.clone().resize(512, 512).png().toFile(path.join(__dirname, '..', 'public', 'logo-options', 'option2-ghost.png'));
   fs.writeFileSync(path.join(__dirname, '..', 'public', 'logo-options', 'option2-ghost.svg'), svg512);
 
-  console.log('All icons generated successfully with 0 white corners!');
+  console.log('All icons generated successfully with flawless viewBox coordinates!');
 }
 
 generateAll().catch(console.error);

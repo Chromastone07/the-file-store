@@ -78,9 +78,9 @@ export default function Home() {
             className="w-full flex flex-col items-center"
           >
             <h1 className="text-5xl sm:text-6xl md:text-7xl font-extrabold tracking-tight mb-4 leading-[1.08]">
-              <span className="text-white">Share anything.</span>
+              <span className="text-[var(--wisp-text)]">Share anything.</span>
               <br />
-              <span className="text-indigo-400">Trust no one.</span>
+              <span className="text-indigo-600 dark:text-indigo-400">Trust no one.</span>
             </h1>
 
             <p className="text-base sm:text-lg md:text-xl max-w-xl mx-auto mb-8 text-[var(--wisp-muted)] leading-relaxed font-normal">
@@ -184,7 +184,7 @@ export default function Home() {
         <section className="py-16 md:py-20 px-4 md:px-8 border-t border-[var(--wisp-border)] bg-[var(--wisp-surface)]/30">
           <div className="max-w-5xl mx-auto">
             <div className="text-center mb-10">
-              <h2 className="text-3xl sm:text-4xl md:text-5xl font-extrabold tracking-tight text-white mb-2">How it works</h2>
+              <h2 className="text-3xl sm:text-4xl md:text-5xl font-extrabold tracking-tight text-[var(--wisp-text)] mb-2">How it works</h2>
               <p className="text-sm sm:text-base text-[var(--wisp-muted)]">Ephemeral privacy in three frictionless steps</p>
             </div>
 
@@ -228,7 +228,7 @@ export default function Home() {
         <section className="py-16 md:py-20 px-4 md:px-8 border-t border-[var(--wisp-border)]">
           <div className="max-w-5xl mx-auto">
             <div className="text-center mb-10">
-              <h2 className="text-3xl sm:text-4xl md:text-5xl font-extrabold tracking-tight text-white mb-2">Built for paranoia</h2>
+              <h2 className="text-3xl sm:text-4xl md:text-5xl font-extrabold tracking-tight text-[var(--wisp-text)] mb-2">Built for paranoia</h2>
               <p className="text-sm sm:text-base text-[var(--wisp-muted)]">Engineered with uncompromising zero-knowledge architecture</p>
             </div>
 
