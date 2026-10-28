@@ -2,38 +2,72 @@
 
 import { useState, useCallback, useRef, useEffect, DragEvent, ChangeEvent } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useFileUpload, UploadPhase } from '@/hooks/useFileUpload';
-import { PHANTOM_CONFIG } from '@/lib/config';
-import { formatFileSize, getFileCategory, getCategoryLabel } from '@/lib/utils';
+import { useFileUpload } from '@/hooks/useFileUpload';
+import { useSenderHistory } from '@/hooks/useSenderHistory';
+import { WISP_CONFIG } from '@/lib/config';
+import { formatFileSize } from '@/lib/utils';
 import { supabase } from '@/lib/supabase';
 import Navbar from '@/components/layout/Navbar';
 import Footer from '@/components/layout/Footer';
 import AnimatedBackground from '@/components/layout/AnimatedBackground';
-import QRCode from 'qrcode';
-import { Bomb } from 'lucide-react';
+import ExpiryControl from '@/components/ui/ExpiryControl';
 import CountdownTimer from '@/components/ui/CountdownTimer';
 import SpotlightCard from '@/components/ui/SpotlightCard';
 import LiveViewCount from '@/components/ui/LiveViewCount';
+import CapacityOverloadScreen from '@/components/ui/CapacityOverloadScreen';
+import QRCode from 'qrcode';
+import { 
+  UploadCloud, 
+  File as FileIcon, 
+  X, 
+  Copy, 
+  Check, 
+  Trash2, 
+  Shield, 
+  Flame, 
+  Lock, 
+  KeyRound,
+  AlertCircle,
+  ArrowRight,
+  AlertTriangle
+} from 'lucide-react';
+import { toast } from 'sonner';
 
 export default function DropPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
-  const [expiry, setExpiry] = useState<{ label: string; value: number }>(PHANTOM_CONFIG.EXPIRY_PRESETS[1]);
-  const [isCustomExpiry, setIsCustomExpiry] = useState(false);
-  const [customExpiryValue, setCustomExpiryValue] = useState(1);
-  const [customExpiryUnit, setCustomExpiryUnit] = useState<'minutes'|'seconds'>('minutes');
+  const [expirySeconds, setExpirySeconds] = useState(WISP_CONFIG.DEFAULT_EXPIRY_MINUTES * 60);
   const [burnAfterReading, setBurnAfterReading] = useState(false);
   const [addPassword, setAddPassword] = useState(false);
   const [password, setPassword] = useState('');
   const [stripMetadata, setStripMetadata] = useState(true);
-  
+
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
   const [fileError, setFileError] = useState('');
-  const [isDestroyed, setIsDestroyed] = useState(false);
+  const [showConfirmDestruct, setShowConfirmDestruct] = useState(false);
 
-  const { uploadFile, destructDrop, phase, progress, result, reset, error } = useFileUpload();
+  const { uploadFile, destructDrop, phase, progress, result, reset, error } = useFileUpload('drop');
+  const { history, markAsDestroyed: markHistoryDestroyed } = useSenderHistory();
+  const historyItem = history.find(h => h.id === result?.sessionCode);
+
+  const [localIsDestroyed, setLocalIsDestroyed] = useState(false);
+  const [isSimOverload, setIsSimOverload] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return new URLSearchParams(window.location.search).get('sim') === 'overload';
+    }
+    return false;
+  });
+  const isDestroyed = result?.isDestroyed || historyItem?.isDestroyed || localIsDestroyed;
+
+  const markDestroyed = useCallback(() => {
+    setLocalIsDestroyed(true);
+    if (result?.sessionCode) {
+      markHistoryDestroyed(result.sessionCode, 'manual');
+    }
+  }, [result, markHistoryDestroyed]);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
@@ -52,8 +86,8 @@ export default function DropPage() {
     const totalCurrentSize = files.reduce((acc, f) => acc + f.size, 0);
     const totalNewSize = newFiles.reduce((acc, f) => acc + f.size, 0);
     
-    if (totalCurrentSize + totalNewSize > PHANTOM_CONFIG.MAX_FILE_SIZE) {
-      setFileError(`Total file size too large. Maximum size is ${formatFileSize(PHANTOM_CONFIG.MAX_FILE_SIZE)}.`);
+    if (totalCurrentSize + totalNewSize > WISP_CONFIG.MAX_FILE_SIZE) {
+      setFileError(`Total file size too large. Maximum size is ${WISP_CONFIG.MAX_FILE_SIZE_DISPLAY}.`);
       return;
     }
     
@@ -78,15 +112,8 @@ export default function DropPage() {
     if (files.length === 0) return;
     
     try {
-      let finalExpiry = expiry.value;
-      if (isCustomExpiry) {
-        finalExpiry = customExpiryUnit === 'minutes' ? customExpiryValue * 60 : customExpiryValue;
-      } else {
-        finalExpiry = finalExpiry * 60; // preset values are in minutes
-      }
-
       const uploadResult = await uploadFile(files, {
-        expirySeconds: finalExpiry,
+        expirySeconds,
         burnAfterReading,
         password: addPassword && password ? password : null,
         stripMetadata
@@ -96,19 +123,22 @@ export default function DropPage() {
         const qrUrl = await QRCode.toDataURL(uploadResult.shareLink, { 
           width: 200, 
           margin: 2, 
-          color: { dark: '#e2e8f0', light: '#0d0d1a' } 
+          color: { dark: '#f8fafc', light: '#090a10' } 
         });
         setQrDataUrl(qrUrl);
+        toast.success('Files encrypted and ready to share');
       }
-    } catch (err: any) {
-      setFileError(err.message || 'Upload failed');
+    } catch (err: unknown) {
+      setFileError(err instanceof Error ? err.message : 'Upload failed');
     }
   };
 
   useEffect(() => {
     if (phase !== 'done' || !result?.sessionCode) return;
     
-    // Poll for destruction every 5 seconds as fallback
+    let isCancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
     const pollInterval = setInterval(async () => {
       try {
         const { hashString } = await import('@/lib/crypto');
@@ -116,26 +146,27 @@ export default function DropPage() {
         const { data } = await supabase
           .rpc('get_drops_by_lookup_code', { p_code: dbLookupCode });
         
-        // If no rows exist, or if ALL files in the group are destroyed
-        if (!data || data.length === 0 || data.every((d: any) => d.is_destroyed)) {
-          setIsDestroyed(true);
+        if (isCancelled) return;
+        if (!data || data.length === 0 || data.every((d: { is_destroyed?: boolean }) => d.is_destroyed)) {
+          markDestroyed();
         }
-      } catch (e) {}
-    }, 5000);
+      } catch {
+        // Ignored
+      }
+    }, 6000);
 
-    // Real-time listener setup using an async function to get the hash
-    let channel: any;
     const setupListener = async () => {
       const { hashString } = await import('@/lib/crypto');
       const dbLookupCode = await hashString(result.sessionCode);
-      
+      if (isCancelled) return;
+
       channel = supabase
         .channel(`drop-watch-${dbLookupCode}`)
         .on(
           'postgres_changes',
           { event: 'UPDATE', schema: 'public', table: 'drops', filter: `session_code=eq.${dbLookupCode}` },
-          (payload: any) => {
-            if (payload.new?.is_destroyed) setIsDestroyed(true);
+          (payload: { new?: { is_destroyed?: boolean } }) => {
+            if (payload.new?.is_destroyed) markDestroyed();
           }
         )
         .subscribe();
@@ -144,19 +175,40 @@ export default function DropPage() {
     setupListener();
 
     return () => {
+      isCancelled = true;
       clearInterval(pollInterval);
       if (channel) supabase.removeChannel(channel);
     };
-  }, [phase, result]);
+  }, [phase, result, markDestroyed]);
 
   const copyToClipboard = (text: string, type: 'link' | 'code') => {
-    navigator.clipboard.writeText(text);
+    try {
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(text).catch(() => {});
+      }
+    } catch {
+      // Safe fallback
+    }
     if (type === 'link') {
       setCopiedLink(true);
       setTimeout(() => setCopiedLink(false), 2000);
+      toast.success('Share link copied');
     } else {
       setCopiedCode(true);
       setTimeout(() => setCopiedCode(false), 2000);
+      toast.success('Session code copied');
+    }
+  };
+
+  const handleDestructNow = async () => {
+    if (!result?.sessionCode) return;
+    try {
+      await destructDrop(result.sessionCode);
+      markDestroyed();
+      setShowConfirmDestruct(false);
+      toast.success('Files destroyed and wiped from server');
+    } catch {
+      toast.error('Failed to destroy file session');
     }
   };
 
@@ -165,464 +217,453 @@ export default function DropPage() {
     setFileError('');
     reset();
     setQrDataUrl('');
+    setLocalIsDestroyed(false);
+    setShowConfirmDestruct(false);
   };
 
   return (
-    <div className="min-h-screen flex flex-col relative text-[var(--phantom-text)]">
+    <div className="relative h-full min-h-dvh flex flex-col font-sans text-[var(--wisp-text)] selection:bg-[var(--wisp-glow)]/30">
       <AnimatedBackground />
       <Navbar />
-      
-      <main className="flex-1 container mx-auto px-4 py-12 flex flex-col items-center justify-center z-10">
+
+      <main className="flex-1 min-h-0 flex flex-col justify-center px-4 sm:px-6 pt-2 mobile-bottom-clearance z-10">
         <motion.div 
-          initial={{ opacity: 0, y: 20 }}
+          initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
-          className="w-full max-w-2xl"
+          className="w-full max-w-2xl mx-auto flex flex-col justify-center"
         >
+          {/* Header Title */}
+          <div className="text-center mb-2.5 sm:mb-4">
+            <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-[var(--wisp-text)]">
+              Drop File
+            </h1>
+            <p className="text-xs sm:text-sm text-[var(--wisp-muted)]">
+              Anonymous, encrypted file sharing. Files self-destruct after download or expiry.
+            </p>
+          </div>
+
           <AnimatePresence mode="wait">
-            {(phase === 'idle' || phase === 'error') && (
+            {(phase === 'error' || isSimOverload) ? (
+              <CapacityOverloadScreen
+                key="overload"
+                mode="drop"
+                errorMessage={error || (isSimOverload ? "SIMULATED_PEAK_CAPACITY" : undefined)}
+                onRetry={handleUpload}
+                onReset={() => {
+                  handleReset();
+                  setIsSimOverload(false);
+                }}
+              />
+            ) : (phase === 'idle' || phase === 'stripping' || phase === 'encrypting' || phase === 'uploading') && (
               <motion.div 
                 key="idle"
-                initial={{ opacity: 0, scale: 0.95 }}
+                initial={{ opacity: 0, scale: 0.98 }}
                 animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 1.05 }}
-                transition={{ type: "spring", stiffness: 300, damping: 25 }}
-                className="space-y-6"
+                exit={{ opacity: 0, scale: 1.02 }}
+                transition={{ duration: 0.2 }}
+                className="space-y-3"
               >
-                {phase === 'error' && (
+                {/* Error Banner */}
+                {fileError && (
                   <motion.div 
-                    initial={{ opacity: 0, y: -10 }}
+                    initial={{ opacity: 0, y: -8 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="bg-[var(--phantom-danger)]/10 border border-[var(--phantom-danger)]/50 text-[var(--phantom-danger)] px-4 py-3 rounded-xl flex items-center justify-between"
+                    className="bg-rose-500/15 border border-rose-500/30 text-rose-300 px-3.5 py-2 rounded-xl text-xs flex items-center justify-between backdrop-blur-md"
                   >
-                    <span>{error || 'An error occurred during upload.'}</span>
-                    <button onClick={reset} className="text-sm underline hover:no-underline ml-4">Dismiss</button>
+                    <span className="flex items-center gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      {fileError}
+                    </span>
+                    <button onClick={() => setFileError('')} className="text-xs font-bold underline ml-3 cursor-pointer">
+                      Dismiss
+                    </button>
                   </motion.div>
                 )}
                 
-                <SpotlightCard
-                  className={`phantom-card border-2 border-dashed p-1 transition-all duration-500 cursor-pointer ${
-                    isDragging 
-                      ? 'border-[var(--phantom-glow)] scale-[1.02] shadow-[0_0_30px_rgba(99,102,241,0.3)]' 
-                      : 'border-[var(--phantom-border)] hover:border-[var(--phantom-accent)]'
-                  }`}
-                  onDragOver={handleDragOver}
-                  onDragLeave={handleDragLeave}
-                  onDrop={handleDrop}
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <div className="flex flex-col items-center justify-center min-h-[16rem] p-10 bg-[var(--phantom-surface)]/40 rounded-xl pointer-events-none">
-                    <input 
-                      type="file" 
-                      multiple
-                      ref={fileInputRef} 
-                      className="hidden" 
-                      onChange={handleFileSelect}
-                    />
-                    
+                {/* Unified Frosted Glassmorphism SpotlightCard for Drop + Options */}
+                <SpotlightCard className="p-4 sm:p-6 shadow-2xl flex flex-col gap-4">
+                  <input 
+                    type="file" 
+                    multiple
+                    ref={fileInputRef} 
+                    className="hidden" 
+                    onChange={handleFileSelect}
+                  />
+
+                  {/* Dropzone Area */}
+                  <div
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                    onClick={() => fileInputRef.current?.click()}
+                    className={`border-2 border-dashed rounded-2xl p-6 sm:p-8 text-center cursor-pointer transition-all duration-300 bg-[var(--wisp-surface-glass)] hover:bg-[var(--wisp-elevated)] ${
+                      isDragging 
+                        ? 'border-indigo-400 bg-indigo-500/10 shadow-[0_0_30px_rgba(99,102,241,0.3)] scale-[1.01]' 
+                        : 'border-[var(--wisp-border)] hover:border-indigo-400/60'
+                    }`}
+                  >
                     {files.length > 0 ? (
-                      <div className="text-center w-full">
-                        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-[var(--phantom-elevated)] mb-4">
-                          <svg className="w-8 h-8 text-[var(--phantom-glow)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                          </svg>
+                      <div className="space-y-3">
+                        <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-[var(--wisp-surface-glass)] border border-[var(--wisp-border)] text-indigo-500 shadow-inner">
+                          <FileIcon className="w-6 h-6" />
                         </div>
                         
-                        <div className="flex flex-col gap-2 max-h-32 overflow-y-auto mb-4 px-4 w-full">
+                        <div className="flex flex-col gap-1.5 max-h-32 overflow-y-auto px-1 wisp-scrollbar">
                           {files.map((f, i) => (
-                            <div key={i} className="flex items-center justify-between bg-[var(--phantom-elevated)] px-3 py-2 rounded border border-[var(--phantom-border)] pointer-events-auto">
-                              <span className="truncate max-w-[200px] text-sm font-medium">{f.name}</span>
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs text-[var(--phantom-muted)]">{formatFileSize(f.size)}</span>
+                            <div 
+                              key={i} 
+                              onClick={(e) => e.stopPropagation()}
+                              className="flex items-center justify-between bg-[var(--wisp-surface-glass)] hover:bg-[var(--wisp-elevated)] px-3 py-2 rounded-xl border border-[var(--wisp-border)] text-xs backdrop-blur-sm transition-colors"
+                            >
+                              <span className="truncate max-w-[220px] sm:max-w-[300px] font-medium text-[var(--wisp-text)]">
+                                {f.name}
+                              </span>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span className="text-[10px] text-[var(--wisp-muted)] font-mono">
+                                  {formatFileSize(f.size)}
+                                </span>
                                 <button 
+                                  type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     setFiles(files.filter((_, idx) => idx !== i));
                                   }}
-                                  className="p-1 hover:bg-[var(--phantom-surface)] rounded text-[var(--phantom-danger)] transition-colors"
+                                  className="p-1 hover:bg-rose-500/20 rounded-lg text-rose-500 transition-colors cursor-pointer"
+                                  title="Remove file"
                                 >
-                                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                                  <X className="w-3.5 h-3.5" />
                                 </button>
                               </div>
                             </div>
                           ))}
                         </div>
 
-                        <div className="text-[var(--phantom-muted)] flex items-center justify-center space-x-2">
-                          <span>{files.length} file{files.length > 1 ? 's' : ''}</span>
+                        <div className="text-[11px] text-[var(--wisp-muted)] flex items-center justify-center space-x-2 pt-1">
+                          <span>{files.length} file{files.length > 1 ? 's' : ''} selected</span>
                           <span>•</span>
-                          <span>Total: {formatFileSize(files.reduce((a,b)=>a+b.size,0))}</span>
+                          <span className="font-mono">Total: {formatFileSize(files.reduce((a,b)=>a+b.size,0))}</span>
+                          <span>•</span>
+                          <span className="text-indigo-500 hover:underline">Click to add more</span>
                         </div>
                       </div>
                     ) : (
-                      <div className="text-center space-y-4">
+                      <div className="space-y-2.5 py-2">
                         <motion.div 
-                          animate={isDragging ? { y: [0, -10, 0] } : {}}
+                          animate={isDragging ? { y: [0, -8, 0] } : {}}
                           transition={{ repeat: Infinity, duration: 1 }}
                           className="inline-block"
                         >
-                          <svg className="w-16 h-16 text-[var(--phantom-muted)] mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                          </svg>
+                          <div className="w-14 h-14 rounded-2xl bg-[var(--wisp-surface-glass)] border border-[var(--wisp-border)] flex items-center justify-center text-indigo-500 mx-auto shadow-inner">
+                            <UploadCloud className="w-7 h-7" />
+                          </div>
                         </motion.div>
                         <div>
-                          <h3 className="text-xl font-medium mb-1">Drop a file here</h3>
-                          <p className="text-[var(--phantom-muted)]">or click to browse</p>
+                          <h3 className="text-base sm:text-lg font-bold text-[var(--wisp-text)]">
+                            Drop a file here
+                          </h3>
+                          <p className="text-xs text-[var(--wisp-muted)]">
+                            or click to browse your device
+                          </p>
                         </div>
-                        <p className="text-sm text-[var(--phantom-muted)]/70 mt-4">Max size: {formatFileSize(PHANTOM_CONFIG.MAX_FILE_SIZE)}</p>
+                        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--wisp-surface-glass)] border border-[var(--wisp-border)] text-[10px] text-[var(--wisp-muted)]">
+                          <span>Max 50MB</span>
+                          <span>•</span>
+                          <span>All formats supported</span>
+                        </div>
                       </div>
                     )}
                   </div>
-                </SpotlightCard>
-                
-                {fileError && (
-                  <div className="text-[var(--phantom-danger)] text-sm text-center">{fileError}</div>
-                )}
 
-                <AnimatePresence>
-                  {files.length > 0 && (
-                    <motion.div 
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={{ opacity: 0, height: 0 }}
-                      className="overflow-hidden"
-                    >
-                      <div className="bg-[var(--phantom-surface)] border border-[var(--phantom-border)] rounded-xl p-6 space-y-6 mt-4">
-                        
-                        <div className="space-y-3">
-                          <label className="text-sm font-medium text-[var(--phantom-muted)] uppercase tracking-wider">Expiry Time</label>
-                          <div className="grid grid-cols-4 gap-2">
-                            {PHANTOM_CONFIG.EXPIRY_PRESETS.map((preset) => (
-                              <button
-                                key={preset.label}
-                                onClick={() => {
-                                  setExpiry(preset);
-                                  setIsCustomExpiry(false);
-                                }}
-                                className={`py-2 rounded-lg text-sm font-medium transition-colors ${
-                                  expiry.label === preset.label && !isCustomExpiry
-                                    ? 'bg-[var(--phantom-glow)] text-white' 
-                                    : 'bg-[var(--phantom-elevated)] text-[var(--phantom-text)] hover:bg-[var(--phantom-elevated)]/80'
-                                }`}
-                              >
-                                {preset.label}
-                              </button>
-                            ))}
-                            <button
-                              onClick={() => setIsCustomExpiry(true)}
-                              className={`py-2 rounded-lg text-sm font-medium transition-colors ${
-                                isCustomExpiry
-                                  ? 'bg-[var(--phantom-glow)] text-white' 
-                                  : 'bg-[var(--phantom-elevated)] text-[var(--phantom-text)] hover:bg-[var(--phantom-elevated)]/80'
-                              }`}
-                            >
-                              Custom
-                            </button>
-                          </div>
-                          {isCustomExpiry && (
-                            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="mt-3 flex items-center gap-3 bg-[var(--phantom-elevated)]/50 p-3 rounded-lg border border-[var(--phantom-border)]">
-                              <span className="text-sm text-[var(--phantom-text)] font-medium whitespace-nowrap">Keep alive for:</span>
-                              <div className="flex items-center gap-2">
-                                <input 
-                                  type="number" 
-                                  min="1"
-                                  max="525600"
-                                  value={customExpiryValue}
-                                  onChange={(e) => setCustomExpiryValue(Math.max(1, parseInt(e.target.value) || 1))}
-                                  className="w-20 bg-[var(--phantom-surface)] border border-[var(--phantom-border)] rounded-md px-3 py-1.5 text-center text-sm text-[var(--phantom-text)] focus:outline-none focus:border-[var(--phantom-glow)] transition-colors"
-                                />
-                                <select
-                                  value={customExpiryUnit}
-                                  onChange={(e) => setCustomExpiryUnit(e.target.value as 'minutes'|'seconds')}
-                                  className="bg-transparent text-sm text-[var(--phantom-muted)] focus:outline-none"
-                                >
-                                  <option value="minutes">minutes</option>
-                                  <option value="seconds">seconds</option>
-                                </select>
-                              </div>
-                            </motion.div>
-                          )}
-                        </div>
+                  {/* Options: Smoothly expands when files are present, or available as compact controls */}
+                  <AnimatePresence>
+                    {files.length > 0 && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="space-y-3 pt-1 border-t border-[var(--wisp-border)] overflow-hidden"
+                      >
+                        <ExpiryControl 
+                          valueSeconds={expirySeconds} 
+                          onChange={(sel) => setExpirySeconds(sel.totalSeconds)} 
+                        />
 
-                        <div className="flex items-center justify-between py-2 border-b border-[var(--phantom-border)]/50">
-                          <div>
-                            <div className="font-medium">Burn after reading</div>
-                            <div className="text-sm text-[var(--phantom-muted)]">File is permanently deleted after first view (One-time link)</div>
-                          </div>
-                          <label className="relative inline-flex items-center cursor-pointer">
-                            <input type="checkbox" className="sr-only peer" checked={burnAfterReading} onChange={() => setBurnAfterReading(!burnAfterReading)} />
-                            <div className="w-11 h-6 bg-[var(--phantom-elevated)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-[var(--phantom-text)] after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[var(--phantom-glow)]"></div>
-                          </label>
-                        </div>
-
-                        <div className="flex items-center justify-between py-2 border-b border-[var(--phantom-border)]/50">
-                          <div>
-                            <div className="font-medium">Add password layer</div>
-                            <div className="text-sm text-[var(--phantom-muted)]">Require a password to decrypt</div>
-                          </div>
-                          <label className="relative inline-flex items-center cursor-pointer">
-                            <input type="checkbox" className="sr-only peer" checked={addPassword} onChange={() => setAddPassword(!addPassword)} />
-                            <div className="w-11 h-6 bg-[var(--phantom-elevated)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-[var(--phantom-text)] after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[var(--phantom-glow)]"></div>
-                          </label>
-                        </div>
-                        
-                        {addPassword && (
-                          <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="pt-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                          {/* Burn After Reading */}
+                          <label className="flex items-center justify-between p-2.5 rounded-xl bg-[var(--wisp-surface-glass)] border border-[var(--wisp-border)] hover:border-[var(--wisp-border-strong)] transition-colors cursor-pointer select-none">
+                            <div className="flex items-center gap-1.5">
+                              <Flame className="w-3.5 h-3.5 text-amber-500" />
+                              <span className="text-[11px] text-[var(--wisp-text)] font-medium">Burn on view</span>
+                            </div>
                             <input 
-                              type="password" 
-                              placeholder="Enter secure password"
+                              type="checkbox" 
+                              checked={burnAfterReading} 
+                              onChange={(e) => setBurnAfterReading(e.target.checked)} 
+                              className="accent-indigo-500 w-4 h-4 cursor-pointer" 
+                            />
+                          </label>
+
+                          {/* Strip EXIF Metadata */}
+                          <label className="flex items-center justify-between p-2.5 rounded-xl bg-[var(--wisp-surface-glass)] border border-[var(--wisp-border)] hover:border-[var(--wisp-border-strong)] transition-colors cursor-pointer select-none">
+                            <div className="flex items-center gap-1.5">
+                              <Shield className="w-3.5 h-3.5 text-emerald-500" />
+                              <span className="text-[11px] text-[var(--wisp-text)] font-medium">Strip EXIF</span>
+                            </div>
+                            <input 
+                              type="checkbox" 
+                              checked={stripMetadata} 
+                              onChange={(e) => setStripMetadata(e.target.checked)} 
+                              className="accent-indigo-500 w-4 h-4 cursor-pointer" 
+                            />
+                          </label>
+
+                          {/* Password Protection */}
+                          <label className="flex items-center justify-between p-2.5 rounded-xl bg-[var(--wisp-surface-glass)] border border-[var(--wisp-border)] hover:border-[var(--wisp-border-strong)] transition-colors cursor-pointer select-none">
+                            <div className="flex items-center gap-1.5">
+                              <KeyRound className="w-3.5 h-3.5 text-indigo-500" />
+                              <span className="text-[11px] text-[var(--wisp-text)] font-medium">Password</span>
+                            </div>
+                            <input 
+                              type="checkbox" 
+                              checked={addPassword} 
+                              onChange={(e) => setAddPassword(e.target.checked)} 
+                              className="accent-indigo-500 w-4 h-4 cursor-pointer" 
+                            />
+                          </label>
+                        </div>
+
+                        {addPassword && (
+                          <motion.div 
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: 'auto' }}
+                            className="flex items-center gap-2 bg-[var(--wisp-surface-glass)] border border-[var(--wisp-border)] rounded-xl px-3 py-2"
+                          >
+                            <Lock className="w-4 h-4 text-[var(--wisp-muted)] shrink-0" />
+                            <input
+                              type="password"
+                              placeholder="Set optional unlock password..."
                               value={password}
                               onChange={(e) => setPassword(e.target.value)}
-                              className="w-full bg-[var(--phantom-elevated)] border border-[var(--phantom-border)] rounded-lg px-4 py-3 text-[var(--phantom-text)] focus:outline-none focus:border-[var(--phantom-glow)] transition-colors"
+                              className="bg-transparent text-xs text-[var(--wisp-text)] focus:outline-none w-full placeholder:text-[var(--wisp-muted)]/60"
                             />
                           </motion.div>
                         )}
 
-                        <div className="flex items-center justify-between py-2">
-                          <div>
-                            <div className="font-medium">Strip metadata</div>
-                            <div className="text-sm text-[var(--phantom-muted)]">Remove EXIF, GPS, author info</div>
+                        {/* Upload Progress or Glowing Primary Action Button */}
+                        {phase === 'stripping' || phase === 'encrypting' || phase === 'uploading' ? (
+                          <div className="p-3 bg-[var(--wisp-surface-glass)] rounded-xl border border-[var(--wisp-border)] flex flex-col gap-2">
+                            <div className="flex justify-between text-xs text-[var(--wisp-muted)]">
+                              <span>
+                                {phase === 'stripping' ? 'Sanitizing EXIF metadata...' : phase === 'encrypting' ? 'Encrypting with AES-256-GCM...' : 'Uploading encrypted payload...'}
+                              </span>
+                              <span className="font-mono font-bold text-indigo-400">{progress}%</span>
+                            </div>
+                            <div className="w-full h-1.5 bg-black/40 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-gradient-to-r from-indigo-500 to-violet-500 transition-all duration-300"
+                                style={{ width: `${progress}%` }}
+                              />
+                            </div>
                           </div>
-                          <label className="relative inline-flex items-center cursor-pointer">
-                            <input type="checkbox" className="sr-only peer" checked={stripMetadata} onChange={() => setStripMetadata(!stripMetadata)} />
-                            <div className="w-11 h-6 bg-[var(--phantom-elevated)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-[var(--phantom-text)] after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[var(--phantom-glow)]"></div>
-                          </label>
-                        </div>
-
-                      </div>
-                      
-                      <motion.button
-                        whileHover={{ scale: 1.02 }}
-                        whileTap={{ scale: 0.98 }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleUpload();
-                        }}
-                        disabled={files.length === 0 || (addPassword && !password)}
-                        className="w-full mt-6 bg-[var(--phantom-glow)] hover:bg-[var(--phantom-accent)] text-white font-medium py-4 rounded-xl transition-all shadow-[0_0_20px_rgba(99,102,241,0.4)] hover:shadow-[0_0_30px_rgba(99,102,241,0.6)] disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"
-                      >
-                        Encrypt & Upload
-                      </motion.button>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </motion.div>
-            )}
-
-            {['processing', 'encrypting', 'uploading', 'finalizing'].includes(phase) && (
-              <motion.div
-                key="processing"
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 1.1 }}
-                transition={{ duration: 0.3 }}
-              >
-                <SpotlightCard className="p-12 text-center space-y-8">
-                  <motion.div 
-                    initial={{ scale: 0.8, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    transition={{ type: "spring", bounce: 0.5 }}
-                    className="relative w-32 h-32 mx-auto"
-                  >
-                    <svg className="animate-spin w-full h-full text-[var(--phantom-elevated)] drop-shadow-[0_0_15px_rgba(99,102,241,0.5)]" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    <div className="absolute inset-0 flex items-center justify-center text-[var(--phantom-glow)] font-bold">
-                      {Math.round(progress)}%
-                    </div>
-                  </motion.div>
-                  
-                  <div>
-                    <h3 className="text-xl font-medium mb-2 capitalize">
-                      {phase === 'stripping' ? 'Stripping metadata...' : 
-                      phase === 'encrypting' ? 'Encrypting...' : 
-                      phase === 'uploading' ? 'Uploading...' : 'Finalizing...'}
-                    </h3>
-                    <div className="w-full h-2 bg-[var(--phantom-elevated)] rounded-full overflow-hidden">
-                      <motion.div 
-                        className="h-full bg-[var(--phantom-glow)] relative overflow-hidden"
-                        initial={{ width: 0 }}
-                        animate={{ width: `${progress}%` }}
-                        transition={{ ease: "linear" }}
-                      >
-                        <div className="absolute inset-0 w-full h-full bg-gradient-to-r from-transparent via-white/30 to-transparent -translate-x-full animate-[shimmer_1.5s_infinite]"></div>
+                        ) : (
+                          <motion.button
+                            whileHover={{ scale: 1.01 }}
+                            whileTap={{ scale: 0.98 }}
+                            onClick={handleUpload}
+                            disabled={files.length === 0}
+                            className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-indigo-500 via-indigo-600 to-violet-600 hover:from-indigo-400 hover:via-indigo-500 hover:to-violet-500 text-white font-semibold py-3 px-6 rounded-xl shadow-[0_0_25px_rgba(99,102,241,0.45)] hover:shadow-[0_0_35px_rgba(99,102,241,0.65)] border border-indigo-400/30 transition-all cursor-pointer text-xs sm:text-sm mt-1"
+                          >
+                            <Shield className="w-4 h-4" />
+                            <span>Encrypt and Drop {files.length} File{files.length > 1 ? 's' : ''}</span>
+                          </motion.button>
+                        )}
                       </motion.div>
-                    </div>
-                  </div>
+                    )}
+                  </AnimatePresence>
                 </SpotlightCard>
               </motion.div>
             )}
 
-            {phase === 'done' && result && (
-              <AnimatePresence mode="wait">
-                {isDestroyed ? (
-                  <motion.div
-                    key="destroyed"
-                    initial={{ opacity: 0, scale: 0.8 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.8 }}
-                    transition={{ type: "spring", stiffness: 200, damping: 20 }}
-                  >
-                    <SpotlightCard className="p-12 flex flex-col items-center gap-6 text-center">
-                      <div className="w-20 h-20 bg-[var(--phantom-danger)]/10 rounded-full flex items-center justify-center text-[var(--phantom-danger)]">
-                        <Bomb className="w-10 h-10" />
-                      </div>
-                      <div>
-                        <h2 className="text-2xl font-bold text-[var(--phantom-text)] mb-2">Drop Destroyed</h2>
-                        <p className="text-[var(--phantom-muted)] max-w-sm mx-auto">This secure drop no longer exists. It has been successfully wiped from the server.</p>
-                      </div>
-                      <button 
-                        onClick={() => {
-                          setIsDestroyed(false);
-                          reset();
-                          setFiles([]);
-                        }}
-                        className="mt-4 px-6 py-2 bg-[var(--phantom-elevated)] hover:bg-[var(--phantom-border)] border border-[var(--phantom-border)] rounded-full text-[var(--phantom-text)] transition-colors"
-                      >
-                        Drop another file
-                      </button>
-                    </SpotlightCard>
-                  </motion.div>
-                ) : (
-                  <motion.div
-                    key="done"
-                    initial={{ opacity: 0, y: 30 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -30 }}
-                    transition={{ type: "spring", stiffness: 300, damping: 25 }}
-                  >
-                <SpotlightCard className="p-8 space-y-8">
-                  <motion.div 
-                    initial={{ scale: 0 }} 
-                    animate={{ scale: 1 }} 
-                    transition={{ type: "spring", stiffness: 200, damping: 20 }}
-                    className="text-center"
-                  >
-                    <div className="w-16 h-16 bg-[var(--phantom-success)]/10 rounded-full flex items-center justify-center mx-auto mb-4">
-                      <svg className="w-8 h-8 text-[var(--phantom-success)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                      </svg>
-                    </div>
-                    <h2 className="text-2xl font-bold mb-2">Secure Drop Ready</h2>
-                    <p className="text-[var(--phantom-muted)]">Save this code — we cannot recover it</p>
-                  </motion.div>
+            {/* ── Result State: Signature Big Bold Session Code Result Card ── */}
+            {phase === 'done' && result && !isDestroyed && (
+              <motion.div 
+                key="result"
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 1.02 }}
+                transition={{ duration: 0.2 }}
+              >
+                <SpotlightCard className="p-5 sm:p-7 flex flex-col items-center gap-4 text-center shadow-2xl">
+                  {/* Status Indicator */}
+                  <div className="w-12 h-12 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shadow-[0_0_20px_rgba(52,211,153,0.3)]">
+                    <Check className="w-6 h-6" />
+                  </div>
 
-                  <div className="space-y-6">
-                    <div className="bg-[var(--phantom-elevated)] rounded-lg p-6 text-center relative group">
-                      <div className="text-sm text-[var(--phantom-muted)] mb-2 uppercase tracking-wider font-medium">Session Code</div>
-                      <div className="text-4xl md:text-5xl font-mono tracking-[0.2em] font-bold text-[var(--phantom-text)] drop-shadow-md">
+                  <div className="w-full space-y-3">
+                    {/* Big Session Code Display */}
+                    <div className="relative bg-[var(--wisp-surface-glass)] border border-[var(--wisp-border)] rounded-2xl p-4 sm:p-5 text-center">
+                      <div className="text-[10px] text-[var(--wisp-muted)] uppercase tracking-wider font-semibold mb-1">
+                        Session Code
+                      </div>
+                      <div className="text-3xl sm:text-5xl font-mono tracking-[0.2em] font-bold text-[var(--wisp-text)] drop-shadow-[0_0_20px_rgba(99,102,241,0.4)]">
                         {result.sessionCode}
                       </div>
                       <button 
                         onClick={() => copyToClipboard(result.sessionCode, 'code')}
-                        className="absolute top-4 right-4 p-2 bg-[var(--phantom-surface)] rounded-md hover:bg-[var(--phantom-border)] transition-colors"
-                        title="Copy code"
+                        className="absolute top-3 right-3 p-2 bg-[var(--wisp-surface-glass)] hover:bg-[var(--wisp-elevated)] border border-[var(--wisp-border)] rounded-lg transition-colors text-[var(--wisp-muted)] hover:text-[var(--wisp-text)] cursor-pointer"
+                        title="Copy session code"
                       >
-                        {copiedCode ? (
-                          <svg className="w-5 h-5 text-[var(--phantom-success)]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                        ) : (
-                          <svg className="w-5 h-5 text-[var(--phantom-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
-                        )}
+                        {copiedCode ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
                       </button>
                       
                       {result.filenames && result.filenames.length > 0 && (
-                        <div className="mt-4 flex flex-wrap gap-2 justify-center">
+                        <div className="mt-2.5 flex flex-wrap gap-1.5 justify-center">
                           {result.filenames.map((name, idx) => (
-                            <span key={idx} className="bg-[var(--phantom-surface)] text-[var(--phantom-muted)] text-xs px-2 py-1 rounded border border-[var(--phantom-border)] flex items-center gap-1">
-                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
-                              {name}
+                            <span key={idx} className="bg-[var(--wisp-surface-glass)] text-[var(--wisp-muted)] text-[10px] px-2 py-0.5 rounded border border-[var(--wisp-border)] flex items-center gap-1 font-mono">
+                              <FileIcon className="w-3 h-3 text-indigo-400" />
+                              <span className="truncate max-w-[140px]">{name}</span>
                             </span>
                           ))}
                         </div>
                       )}
                     </div>
 
-                    <div className="flex flex-col md:flex-row gap-6 items-center">
+                    {/* QR Code and Share Link Grid */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-center">
                       {qrDataUrl && (
-                        <div className="bg-[var(--phantom-elevated)] p-4 rounded-lg shrink-0">
-                          <img src={qrDataUrl} alt="QR Code" className="w-32 h-32 rounded" />
+                        <div className="bg-[var(--wisp-surface-glass)] border border-[var(--wisp-border)] p-2.5 rounded-xl flex items-center justify-center sm:col-span-1">
+                          <div className="p-1.5 bg-white rounded-lg shadow-md">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={qrDataUrl} alt="QR Code" className="w-20 h-20" />
+                          </div>
                         </div>
                       )}
                       
-                      <div className="flex-1 w-full space-y-4">
-                        <div className="relative">
-                          <input 
-                            type="text" 
-                            readOnly 
-                            value={result.shareLink} 
-                            className="w-full bg-[var(--phantom-elevated)] border border-[var(--phantom-border)] rounded-lg px-4 py-3 pr-12 text-sm font-mono text-[var(--phantom-text)] focus:outline-none"
-                          />
-                          <button 
-                            onClick={() => copyToClipboard(result.shareLink, 'link')}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 bg-[var(--phantom-surface)] rounded hover:bg-[var(--phantom-border)] transition-colors"
-                          >
-                            {copiedLink ? (
-                              <svg className="w-4 h-4 text-[var(--phantom-success)]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                            ) : (
-                              <svg className="w-4 h-4 text-[var(--phantom-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
-                            )}
-                          </button>
+                      <div className={`space-y-2.5 text-left ${qrDataUrl ? 'sm:col-span-2' : 'sm:col-span-3'}`}>
+                        <div className="bg-[var(--wisp-surface-glass)] border border-[var(--wisp-border)] rounded-xl p-2.5">
+                          <div className="text-[10px] text-[var(--wisp-muted)] uppercase tracking-wider mb-1 font-semibold">
+                            Share Link
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <input 
+                              type="text" 
+                              readOnly 
+                              value={result.shareLink} 
+                              className="w-full bg-transparent text-xs font-mono text-[var(--wisp-text)] focus:outline-none"
+                            />
+                            <button 
+                              onClick={() => copyToClipboard(result.shareLink, 'link')}
+                              className="p-1.5 bg-[var(--wisp-surface-glass)] hover:bg-[var(--wisp-elevated)] border border-[var(--wisp-border)] rounded-lg transition-colors text-[var(--wisp-text)] cursor-pointer shrink-0"
+                              title="Copy link"
+                            >
+                              {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                            </button>
+                          </div>
                         </div>
                         
-                        <div className="flex space-x-3 text-xs font-medium">
-                          <span className="flex items-center px-3 py-1 bg-[var(--phantom-elevated)] rounded-full text-[var(--phantom-success)]">
-                            <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
+                        <div className="flex space-x-2 text-[10px] font-medium">
+                          <span className="flex items-center px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/20 rounded-full text-emerald-500">
+                            <Shield className="w-3 h-3 mr-1" />
                             E2E Encrypted
                           </span>
-                          <span className="flex items-center px-3 py-1 bg-[var(--phantom-elevated)] rounded-full text-[var(--phantom-accent)]">
-                            <svg className="w-3 h-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
+                          <span className="flex items-center px-2 py-0.5 bg-indigo-500/10 border border-indigo-500/20 rounded-full text-indigo-500">
+                            <Lock className="w-3 h-3 mr-1" />
                             Zero Knowledge
                           </span>
                         </div>
                       </div>
                     </div>
                   </div>
+
+                  {/* Warning banner */}
+                  <div className="flex items-center gap-2 text-[11px] text-amber-500 bg-amber-500/10 border border-amber-500/20 px-3 py-1.5 rounded-lg w-full justify-center">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    <span>Do not lose this link. Files cannot be recovered once purged.</span>
+                  </div>
                   
-                  <div className="mt-12 space-y-8">
-                    <div className="bg-[var(--phantom-elevated)]/50 rounded-xl p-6 border border-[var(--phantom-border)] flex flex-col md:flex-row justify-around items-center gap-6">
-                      <div className="flex flex-col items-center">
-                        <span className="text-[var(--phantom-muted)] text-xs font-semibold uppercase tracking-wider mb-0.5">Time Left</span>
-                        <CountdownTimer expiresAt={result.expiresAt} />
+                  {/* Stats Row */}
+                  <div className="bg-[var(--wisp-surface-glass)] border border-[var(--wisp-border)] rounded-xl p-3 w-full flex flex-col sm:flex-row justify-around items-center gap-3">
+                    <div className="flex flex-col items-center">
+                      <CountdownTimer expiresAt={result.expiresAt} size="sm" />
+                    </div>
+                    <div className="hidden sm:block w-[1px] h-6 bg-[var(--wisp-border)]" />
+                    <LiveViewCount sessionCode={result.sessionCode} type="drop" />
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex flex-col sm:flex-row gap-2.5 w-full">
+                    {showConfirmDestruct ? (
+                      <div className="flex-1 flex items-center gap-2 bg-rose-500/10 border border-rose-500/30 rounded-xl p-2 justify-center">
+                        <span className="text-xs text-rose-500 font-medium">Permanently destroy now?</span>
+                        <button
+                          onClick={handleDestructNow}
+                          className="px-3 py-1 bg-rose-500 text-white text-xs font-bold rounded-lg hover:bg-rose-600 cursor-pointer"
+                        >
+                          Confirm
+                        </button>
+                        <button
+                          onClick={() => setShowConfirmDestruct(false)}
+                          className="px-2 py-1 text-xs text-[var(--wisp-muted)] hover:text-[var(--wisp-text)] cursor-pointer"
+                        >
+                          Cancel
+                        </button>
                       </div>
-                      <div className="w-px h-8 bg-[var(--phantom-border)] hidden md:block"></div>
-                      <LiveViewCount sessionCode={result.sessionCode} type="drop" />
-                    </div>
-
-                    <div className="flex flex-col sm:flex-row gap-4 max-w-lg mx-auto">
+                    ) : (
                       <button
-                        onClick={async () => {
-                          try {
-                            await destructDrop(result.sessionCode);
-                            setIsDestroyed(true);
-                          } catch (err) {
-                            console.error('Failed to destroy session.');
-                          }
-                        }}
-                        className="flex-1 flex items-center justify-center gap-2 bg-[var(--phantom-danger)] hover:bg-[var(--phantom-danger)]/90 text-white font-medium py-3.5 rounded-xl transition-all shadow-lg hover:shadow-xl hover:-translate-y-0.5"
+                        onClick={() => setShowConfirmDestruct(true)}
+                        className="flex-1 flex items-center justify-center gap-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 border border-rose-500/30 font-semibold py-2.5 rounded-xl transition-all text-xs cursor-pointer"
                       >
-                        <Bomb className="w-5 h-5" />
-                        Destruct Now
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Destruct Now</span>
                       </button>
+                    )}
 
-                      <motion.button
-                        whileHover={{ scale: 1.02 }}
-                        whileTap={{ scale: 0.98 }}
-                        onClick={handleReset}
-                        className="flex-1 bg-[var(--phantom-elevated)] hover:bg-[var(--phantom-border)] border border-[var(--phantom-border)] text-[var(--phantom-text)] font-medium py-3.5 rounded-xl transition-colors shadow-sm"
-                      >
-                        Drop another file
-                      </motion.button>
-                    </div>
+                    <motion.button
+                      whileHover={{ scale: 1.01 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={handleReset}
+                      className="flex-1 flex items-center justify-center gap-1.5 bg-[var(--wisp-surface-glass)] hover:bg-[var(--wisp-elevated)] border border-[var(--wisp-border)] text-[var(--wisp-text)] font-semibold py-2.5 rounded-xl transition-colors text-xs cursor-pointer shadow-sm"
+                    >
+                      <span>Drop another file</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </motion.button>
                   </div>
                 </SpotlightCard>
               </motion.div>
-                )}
-              </AnimatePresence>
+            )}
+
+            {/* ── Destroyed State ── */}
+            {isDestroyed && (
+              <motion.div 
+                key="destroyed"
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+              >
+                <SpotlightCard className="p-8 sm:p-10 flex flex-col items-center gap-4 text-center shadow-2xl">
+                  <div className="w-16 h-16 rounded-full bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
+                    <Trash2 className="w-8 h-8" />
+                  </div>
+                  <div>
+                    <h2 className="text-xl sm:text-2xl font-bold text-[var(--wisp-text)] mb-1">
+                      File Destroyed
+                    </h2>
+                    <p className="text-xs sm:text-sm text-[var(--wisp-muted)] max-w-sm mx-auto">
+                      This secure file session no longer exists. All encrypted blobs were wiped permanently from storage.
+                    </p>
+                  </div>
+                  <button 
+                    onClick={handleReset}
+                    className="mt-2 px-5 py-2 bg-[var(--wisp-surface-glass)] hover:bg-[var(--wisp-elevated)] border border-[var(--wisp-border)] rounded-full text-xs font-semibold text-[var(--wisp-text)] transition-colors cursor-pointer"
+                  >
+                    Drop another file
+                  </button>
+                </SpotlightCard>
+              </motion.div>
             )}
           </AnimatePresence>
         </motion.div>
       </main>
-      
+
       <Footer />
     </div>
   );

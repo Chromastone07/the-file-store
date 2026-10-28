@@ -1,9 +1,9 @@
-// PHANTOM Configuration
+// Phantom Configuration
 // All configurable constants in one place for easy updates
 
 export const PHANTOM_CONFIG = {
   // File size limits
-  MAX_FILE_SIZE: 50 * 1024 * 1024, // 50MB - change this when upgrading Supabase plan
+  MAX_FILE_SIZE: 50 * 1024 * 1024, // 50MB
   MAX_FILE_SIZE_DISPLAY: '50MB',
 
   // Session codes
@@ -26,20 +26,32 @@ export const PHANTOM_CONFIG = {
     { label: '3 days', value: 4320 },
     { label: '7 days', value: 10080 },
   ],
-  DEFAULT_EXPIRY_MINUTES: 1440, // 24 hours
+  DEFAULT_EXPIRY_MINUTES: 5, // 5 minutes default (prevents DB file buildup)
 
-  // Stealth mode
+  // Stealth mode & Grace period
   INACTIVITY_TIMEOUT_MS: 90_000, // 90 seconds
-  PANIC_REDIRECT_URL: 'https://en.wikipedia.org/wiki/Main_Page',
+  PANIC_REDIRECT_URL: '/',
+  ACCESS_GRACE_PERIOD_MS: 5_000, // 5 seconds grace after access begins
 
   // Supabase
   STORAGE_BUCKET: 'drops',
   SIGNED_URL_EXPIRY: 60, // seconds
 
-  // App
-  APP_NAME: 'PHANTOM',
+  // App Metadata (No em dashes permitted)
+  APP_NAME: 'Phantom',
   APP_TAGLINE: 'Share. Access. Vanish.',
   APP_DESCRIPTION: 'Anonymous, end-to-end encrypted, ephemeral data sharing. No accounts. No traces. No compromises.',
+  
+  // Storage Keys
+  STORAGE_KEYS: {
+    SENDER_HISTORY: 'phantom_sender_history',
+    SESSION_DOCK: 'phantom_active_dock',
+    RECEIVER_TOKEN: 'phantom_receiver_token',
+    CHAT_PARTICIPANT: 'phantom_chat_participant',
+    THEME: 'phantom_theme',
+  },
 } as const;
 
+// Aliases for backwards compatibility
+export const WISP_CONFIG = PHANTOM_CONFIG;
 export type ExpiryPreset = typeof PHANTOM_CONFIG.EXPIRY_PRESETS[number];

@@ -1,22 +1,22 @@
-// PHANTOM — E2E Encryption Engine
+// Phantom - E2E Encryption Engine
 // All cryptographic operations happen client-side. The server NEVER sees plaintext data or keys.
 
-import { PHANTOM_CONFIG } from './config';
+import { WISP_CONFIG } from './config';
 
 // ─── Key Generation ───────────────────────────────────────────
 
 /** Generate a random AES-GCM-256 encryption key */
 export async function generateEncryptionKey(): Promise<CryptoKey> {
   return crypto.subtle.generateKey(
-    { name: PHANTOM_CONFIG.AES_ALGORITHM, length: PHANTOM_CONFIG.AES_KEY_LENGTH },
-    true, // extractable — we need to export it for URL fragment
+    { name: WISP_CONFIG.AES_ALGORITHM, length: WISP_CONFIG.AES_KEY_LENGTH },
+    true, // extractable - we need to export it for URL fragment
     ['encrypt', 'decrypt']
   );
 }
 
 /** Generate a random initialization vector */
 export function generateIV(): Uint8Array {
-  return crypto.getRandomValues(new Uint8Array(PHANTOM_CONFIG.IV_LENGTH));
+  return crypto.getRandomValues(new Uint8Array(WISP_CONFIG.IV_LENGTH));
 }
 
 /** Generate a random salt for PBKDF2 */
@@ -38,7 +38,7 @@ export async function importKeyFromBase64(base64: string): Promise<CryptoKey> {
   return crypto.subtle.importKey(
     'raw',
     raw,
-    { name: PHANTOM_CONFIG.AES_ALGORITHM, length: PHANTOM_CONFIG.AES_KEY_LENGTH },
+    { name: WISP_CONFIG.AES_ALGORITHM, length: WISP_CONFIG.AES_KEY_LENGTH },
     false, // not extractable after import
     ['decrypt']
   );
@@ -64,11 +64,11 @@ export async function deriveKeyFromPassword(
     {
       name: 'PBKDF2',
       salt: salt as BufferSource,
-      iterations: PHANTOM_CONFIG.PBKDF2_ITERATIONS,
+      iterations: WISP_CONFIG.PBKDF2_ITERATIONS,
       hash: 'SHA-256',
     },
     keyMaterial,
-    { name: PHANTOM_CONFIG.AES_ALGORITHM, length: PHANTOM_CONFIG.AES_KEY_LENGTH },
+    { name: WISP_CONFIG.AES_ALGORITHM, length: WISP_CONFIG.AES_KEY_LENGTH },
     false,
     ['encrypt', 'decrypt']
   );
@@ -89,7 +89,7 @@ export async function encryptData(
 ): Promise<{ ciphertext: ArrayBuffer; iv: string }> {
   const iv = generateIV();
   const ciphertext = await crypto.subtle.encrypt(
-    { name: PHANTOM_CONFIG.AES_ALGORITHM, iv: iv as BufferSource },
+    { name: WISP_CONFIG.AES_ALGORITHM, iv: iv as BufferSource },
     key,
     data
   );
@@ -104,7 +104,7 @@ export async function decryptData(
 ): Promise<ArrayBuffer> {
   const iv = base64ToArrayBuffer(ivBase64);
   return crypto.subtle.decrypt(
-    { name: PHANTOM_CONFIG.AES_ALGORITHM, iv: iv as BufferSource },
+    { name: WISP_CONFIG.AES_ALGORITHM, iv: iv as BufferSource },
     key,
     ciphertext
   );
@@ -119,7 +119,7 @@ export async function encryptText(
   const data = encoder.encode(text);
   const iv = generateIV();
   const encrypted = await crypto.subtle.encrypt(
-    { name: PHANTOM_CONFIG.AES_ALGORITHM, iv: iv as BufferSource },
+    { name: WISP_CONFIG.AES_ALGORITHM, iv: iv as BufferSource },
     key,
     data
   );
@@ -138,7 +138,7 @@ export async function decryptText(
   const ciphertext = base64ToArrayBuffer(ciphertextBase64);
   const iv = base64ToArrayBuffer(ivBase64);
   const decrypted = await crypto.subtle.decrypt(
-    { name: PHANTOM_CONFIG.AES_ALGORITHM, iv: iv as BufferSource },
+    { name: WISP_CONFIG.AES_ALGORITHM, iv: iv as BufferSource },
     key,
     ciphertext
   );
@@ -156,7 +156,7 @@ export async function encryptWithPassword(
   const key = await deriveKeyFromPassword(password, salt);
   const iv = generateIV();
   const ciphertext = await crypto.subtle.encrypt(
-    { name: PHANTOM_CONFIG.AES_ALGORITHM, iv: iv as BufferSource },
+    { name: WISP_CONFIG.AES_ALGORITHM, iv: iv as BufferSource },
     key,
     data
   );
@@ -178,7 +178,7 @@ export async function decryptWithPassword(
   const key = await deriveKeyFromPassword(password, salt);
   const iv = base64ToArrayBuffer(ivBase64);
   return crypto.subtle.decrypt(
-    { name: PHANTOM_CONFIG.AES_ALGORITHM, iv: iv as BufferSource },
+    { name: WISP_CONFIG.AES_ALGORITHM, iv: iv as BufferSource },
     key,
     ciphertext
   );
@@ -200,7 +200,7 @@ export async function hashString(text: string): Promise<string> {
 
 /** Generate a cryptographically random session code */
 export function generateSessionCode(length?: number): string {
-  const { SESSION_CODE_ALPHABET, SESSION_CODE_LENGTH } = PHANTOM_CONFIG;
+  const { SESSION_CODE_ALPHABET, SESSION_CODE_LENGTH } = WISP_CONFIG;
   const finalLength = length || SESSION_CODE_LENGTH;
   const randomValues = crypto.getRandomValues(new Uint8Array(finalLength));
   let code = '';
@@ -247,3 +247,57 @@ export function base64UrlToArrayBuffer(base64url: string): ArrayBuffer {
 export function secureWipe(buffer: ArrayBuffer): void {
   new Uint8Array(buffer).fill(0);
 }
+
+// ─── Receiver & Receipt Tokens ───────────────────────────────
+
+/** Generate a random one-time receipt token */
+export function generateReceiptToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  return arrayBufferToBase64Url(bytes.buffer as ArrayBuffer);
+}
+
+/** Get or create an anonymous receiver token stored only in sessionStorage */
+export function getOrCreateReceiverToken(): string {
+  if (typeof window === 'undefined') return 'server_receiver';
+  const STORAGE_KEY = WISP_CONFIG.STORAGE_KEYS.RECEIVER_TOKEN;
+  let token = sessionStorage.getItem(STORAGE_KEY);
+  if (!token) {
+    token = generateReceiptToken();
+    sessionStorage.setItem(STORAGE_KEY, token);
+  }
+  return token;
+}
+
+// ─── Friendly Anonymous Chat Aliases ────────────────────────
+
+const ADJECTIVES = ['Quiet', 'Amber', 'Cobalt', 'Velvet', 'Silent', 'Silver', 'Golden', 'Shadow', 'Frost', 'Lunar', 'Solar', 'Sage'];
+const ANIMALS = ['Fox', 'Owl', 'Lynx', 'Badger', 'Hawk', 'Otter', 'Panda', 'Falcon', 'Raven', 'Wolf', 'Deer', 'Crane'];
+const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#06b6d4', '#14b8a6', '#f97316'];
+
+export interface FriendlyAlias {
+  name: string;
+  color: string;
+}
+
+export function generateFriendlyAlias(seedString?: string): FriendlyAlias {
+  let hash = 0;
+  if (seedString) {
+    for (let i = 0; i < seedString.length; i++) {
+      hash = (hash << 5) - hash + seedString.charCodeAt(i);
+      hash |= 0;
+    }
+  } else {
+    hash = Math.floor(Math.random() * 100000);
+  }
+
+  const absHash = Math.abs(hash);
+  const adj = ADJECTIVES[absHash % ADJECTIVES.length];
+  const animal = ANIMALS[(absHash >> 3) % ANIMALS.length];
+  const color = COLORS[(absHash >> 6) % COLORS.length];
+
+  return {
+    name: `${adj} ${animal}`,
+    color,
+  };
+}
+

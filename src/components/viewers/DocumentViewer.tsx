@@ -1,14 +1,34 @@
 "use client";
 
+import { useState, useEffect } from 'react';
 import DOMPurify from 'dompurify';
 
 interface DocumentViewerProps {
   content: string;
   filename: string;
   viewOnly?: boolean;
+  src?: string;
 }
 
-export default function DocumentViewer({ content, filename, viewOnly = false }: DocumentViewerProps) {
+export default function DocumentViewer({ content: initialContent, filename, viewOnly = false, src }: DocumentViewerProps) {
+  const [fetchedContent, setFetchedContent] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!initialContent && src) {
+      let active = true;
+      fetch(src)
+        .then(res => res.text())
+        .then(text => {
+          if (active) setFetchedContent(text);
+        })
+        .catch(() => {});
+      return () => {
+        active = false;
+      };
+    }
+  }, [initialContent, src]);
+
+  const content = initialContent || fetchedContent || '';
   const ext = filename.split('.').pop()?.toLowerCase() || '';
   const isCSV = ext === 'csv';
   const isMarkdown = ext === 'md';
@@ -20,6 +40,8 @@ export default function DocumentViewer({ content, filename, viewOnly = false }: 
       /* silent fail */
     }
   };
+
+
 
   // Parse CSV into rows/columns
   const parseCSV = (text: string): string[][] => {
@@ -52,9 +74,16 @@ export default function DocumentViewer({ content, filename, viewOnly = false }: 
     return rows;
   };
 
-  // Simple markdown to HTML (basic support)
+  // Simple markdown to HTML with strict sanitization
   const renderMarkdown = (text: string): string => {
-    const rawHtml = text
+    const escaped = text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+
+    const formatted = escaped
       // Headers
       .replace(/^### (.+)$/gm, '<h3 style="font-size:1.1rem;font-weight:700;margin:1.5rem 0 0.5rem;">$1</h3>')
       .replace(/^## (.+)$/gm, '<h2 style="font-size:1.3rem;font-weight:700;margin:1.5rem 0 0.5rem;">$1</h2>')
@@ -64,60 +93,31 @@ export default function DocumentViewer({ content, filename, viewOnly = false }: 
       .replace(/\*(.+?)\*/g, '<em>$1</em>')
       // Inline code
       .replace(/`([^`]+)`/g, '<code style="background:var(--phantom-elevated);padding:0.125rem 0.375rem;border-radius:0.25rem;font-size:0.85em;">$1</code>')
-      // Links
-      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" style="color:var(--phantom-accent);text-decoration:underline;">$1</a>')
+      // Safe Links (http/https only)
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" style="color:var(--phantom-accent);text-decoration:underline;">$1</a>')
       // Horizontal rule
       .replace(/^---$/gm, '<hr style="border:none;border-top:1px solid var(--phantom-border);margin:1.5rem 0;" />')
       // Line breaks
       .replace(/\n/g, '<br />');
 
-    // Sanitize the HTML to prevent XSS
+    // Double-sanitize with DOMPurify if in browser
     if (typeof window !== 'undefined') {
-      return DOMPurify.sanitize(rawHtml);
+      return DOMPurify.sanitize(formatted);
     }
-    return rawHtml;
+    return formatted;
   };
 
   return (
     <div className="flex flex-col h-full w-full">
-      {/* Toolbar */}
-      <div
-        className="flex items-center justify-between px-4 py-3 border-b"
-        style={{ borderColor: 'var(--phantom-border)', background: 'var(--phantom-surface)' }}
-      >
-        <div className="flex items-center gap-2">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: 'var(--phantom-accent)' }}>
-            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-            <polyline points="14,2 14,8 20,8" />
-            <line x1="16" y1="13" x2="8" y2="13" />
-            <line x1="16" y1="17" x2="8" y2="17" />
-          </svg>
-          <span className="text-sm font-medium truncate max-w-[50%]" style={{ color: 'var(--phantom-text)' }}>
-            {filename}
-          </span>
-          <span className="text-xs" style={{ color: 'var(--phantom-muted)' }}>
-            {content.split('\n').length} lines
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={copyContent}
-            className="px-3 py-1.5 rounded text-xs font-medium transition-colors hover:opacity-80"
-            style={{ background: 'var(--phantom-elevated)', color: 'var(--phantom-text)' }}
-          >
-            Copy
-          </button>
-          {!viewOnly && (
-            <a
-              href={`data:text/plain;charset=utf-8,${encodeURIComponent(content)}`}
-              download={filename}
-              className="px-3 py-1.5 rounded text-xs font-medium transition-colors"
-              style={{ background: 'var(--phantom-glow)', color: '#fff' }}
-            >
-              Download
-            </a>
-          )}
-        </div>
+      {/* Sub-bar with lines count and copy */}
+      <div className="flex items-center justify-between px-3 sm:px-4 py-2 border-b border-[var(--wisp-border)] bg-[var(--wisp-surface)]/60 text-xs text-[var(--wisp-muted)] shrink-0">
+        <span className="font-mono text-[11px]">{content.split('\n').length} lines</span>
+        <button
+          onClick={copyContent}
+          className="px-2.5 py-1 rounded-lg text-[11px] font-medium bg-[var(--wisp-elevated)] hover:bg-[var(--wisp-border)] text-[var(--wisp-text)] transition-colors"
+        >
+          Copy text
+        </button>
       </div>
 
       {/* Content area */}
@@ -201,7 +201,7 @@ export default function DocumentViewer({ content, filename, viewOnly = false }: 
           className="text-center py-2 text-xs font-medium"
           style={{ background: 'var(--phantom-danger)', color: '#fff' }}
         >
-          🔥 View Only — This file will be destroyed after this session
+          🔥 View Only - This file will be destroyed after this session
         </div>
       )}
     </div>

@@ -1,17 +1,17 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { useParams } from 'next/navigation';
+import { useState, useEffect, useRef } from 'react';
+import { useParams, useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { zipSync } from 'fflate';
-import { decryptData, decryptWithPassword, hashString } from '@/lib/crypto';
-import { getDropsByLookupCode, getSignedDownloadUrl, recordView, destroyExpiredDrop, supabase } from '@/lib/supabase';
+import { decryptData, decryptWithPassword, hashString, importKeyFromBase64 } from '@/lib/crypto';
+import { getDropsByLookupCode, getSignedDownloadUrl, recordView } from '@/lib/supabase';
 import type { DropRecord } from '@/lib/supabase';
-import { getFileCategory, formatFileSize, extractKeyFromFragment } from '@/lib/utils';
+import { getFileCategory, extractKeyFromFragment } from '@/lib/utils';
 import Navbar from '@/components/layout/Navbar';
 import AnimatedBackground from '@/components/layout/AnimatedBackground';
 import { useGlobalSession } from '@/context/GlobalSessionContext';
-import { useRouter } from 'next/navigation';
+import { stealth } from '@/lib/stealth';
+import { sessionCache } from '@/lib/sessionCache';
 
 type AccessState = 'loading' | 'password-required' | 'key-required' | 'decrypting' | 'destroyed' | 'error' | 'expired';
 
@@ -23,7 +23,8 @@ interface DecryptedFile {
 
 export default function AccessDropPage() {
   const params = useParams();
-  const code = params.code as string;
+  const rawParam = params?.code;
+  const code = (Array.isArray(rawParam) ? rawParam[0] : rawParam) || '';
   
   const { addActiveSession, setViewingSessionId } = useGlobalSession();
   const router = useRouter();
@@ -34,8 +35,6 @@ export default function AccessDropPage() {
   const [manualKey, setManualKey] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const dbLookupCodeRef = useRef<string>('');
-
-
 
   useEffect(() => {
     const fetchDrop = async () => {
@@ -59,17 +58,23 @@ export default function AccessDropPage() {
           }
 
           const now = new Date();
-          if (now > new Date(activeDrops[0].expires_at)) { setState('expired'); return; }
+          if (now > new Date(activeDrops[0].expires_at)) {
+            setState('expired');
+            return;
+          }
           
           setDrops(activeDrops);
-          if (activeDrops[0].has_password) { setState('password-required'); } 
-          else { handleDecryption(activeDrops); }
+          if (activeDrops[0].has_password) {
+            setState('password-required');
+          } else {
+            handleDecryption(activeDrops);
+          }
           return;
         }
 
         setState('destroyed');
       } catch (err) {
-        console.error(err);
+        console.error('Fetch drop error:', err);
         setState('error');
         setErrorMsg('Failed to load file details.');
       }
@@ -78,8 +83,6 @@ export default function AccessDropPage() {
     if (code) fetchDrop();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code]);
-
-
 
   const handleDecryption = async (dropList: DropRecord[], providedPassword?: string) => {
     setState('decrypting');
@@ -104,15 +107,20 @@ export default function AccessDropPage() {
           } else {
             const parsedManualKey = (manualKey.includes('#') ? manualKey.split('#').pop() : manualKey)?.trim();
             const keyBase64 = parsedManualKey || extractKeyFromFragment();
-            if (!keyBase64) { setState('key-required'); return; }
-            const { importKeyFromBase64 } = await import('@/lib/crypto');
+            if (!keyBase64) {
+              setState('key-required');
+              return;
+            }
             const key = await importKeyFromBase64(keyBase64);
             plaintext = await decryptData(ciphertext, key, dropData.encryption_iv);
           }
         } else {
           if (!dropData.encryption_salt) continue;
           if (dropData.has_password) {
-            if (!providedPassword) { setState('password-required'); return; }
+            if (!providedPassword) {
+              setState('password-required');
+              return;
+            }
             const combinedPassword = `${rawCode}-${providedPassword}`;
             plaintext = await decryptWithPassword(ciphertext, combinedPassword, dropData.encryption_iv, dropData.encryption_salt);
           } else {
@@ -120,17 +128,43 @@ export default function AccessDropPage() {
           }
         }
 
+        // Track decrypted buffer for stealth auto-wipe
+        stealth.trackBuffer(plaintext);
+
         const fileType = dropData.file_type || 'application/octet-stream';
         const blob = new Blob([plaintext], { type: fileType });
         const objectUrl = URL.createObjectURL(blob);
+        stealth.trackBlobUrl(objectUrl);
 
         let textContent = '';
-        const category = getFileCategory(fileType);
+        const filename = dropData.encrypted_filename || '';
+        const category = getFileCategory(filename);
         if (category === 'code' || category === 'document') {
-          try { textContent = new TextDecoder().decode(plaintext); } catch (e) {}
+          try {
+            textContent = new TextDecoder().decode(plaintext);
+          } catch {
+            textContent = '';
+          }
         }
 
         results.push({ drop: dropData, blobUrl: objectUrl, textContent });
+
+        // Cache decrypted file locally if burn after reading is not enabled
+        if (!dropData.burn_after_reading) {
+          sessionCache.saveDropFile(
+            rawCode,
+            results.length - 1,
+            plaintext.slice(0),
+            filename,
+            fileType,
+            textContent,
+            dropData.expires_at,
+            false
+          ).catch(console.error);
+        }
+
+        // Record the view and trigger burn-after-reading if enabled
+        recordView(dropData.session_code, dropData.burn_after_reading).catch(console.error);
       }
 
       let sessionTitle = 'FILE DROP';
@@ -143,20 +177,23 @@ export default function AccessDropPage() {
 
       addActiveSession({
         type: 'drop',
-        id: rawCode, // Display the short code, not the hash
+        id: rawCode,
         title: sessionTitle,
-        files: results
+        files: results,
+        expiresAt: dropList[0]?.expires_at,
+        burnAfterReading: dropList.some(d => d.burn_after_reading),
       });
 
       setViewingSessionId(rawCode);
       router.replace('/');
-    } catch (err: any) {
-      console.error('Decryption error:', err.message || err);
+    } catch (err: unknown) {
+      console.error('Decryption error:', err);
       setState('error');
       if (err instanceof DOMException && err.name === 'DataError') {
         setErrorMsg('Invalid decryption key. Ensure you copied the full link correctly.');
       } else {
-        setErrorMsg('Decryption failed. Invalid password or key.');
+        const message = err instanceof Error ? err.message : 'Decryption failed. Invalid password or key.';
+        setErrorMsg(message);
       }
     }
   };
@@ -178,13 +215,13 @@ export default function AccessDropPage() {
       
       <main className="flex-1 container mx-auto px-4 py-12 flex flex-col items-center justify-center z-10">
         
-        {state === 'loading' && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col items-center">
-            <svg className="animate-spin w-12 h-12 text-[var(--phantom-glow)] mb-4" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
-            <div className="text-lg font-medium text-[var(--phantom-muted)]">Retrieving...</div>
+        {/* Loading / Decrypting */}
+        {(state === 'loading' || state === 'decrypting') && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="panel w-full max-w-md mx-auto py-12 flex flex-col items-center justify-center">
+            <div className="w-[34px] h-[34px] rounded-full border-2 border-[var(--phantom-border)] border-t-[var(--phantom-glow)] mb-5 animate-spin"></div>
+            <p className="text-[13.5px] text-[var(--phantom-muted)] text-center">
+              {state === 'loading' ? 'Locating session...' : 'Decrypting locally...'}
+            </p>
           </motion.div>
         )}
 
@@ -220,18 +257,6 @@ export default function AccessDropPage() {
           </motion.div>
         )}
 
-        {/* Loading */}
-        {(state === 'loading' || state === 'decrypting') && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="panel w-full max-w-md mx-auto py-12 flex flex-col items-center justify-center">
-            <div className="w-[34px] h-[34px] rounded-full border-2 border-[var(--phantom-border)] border-t-[var(--phantom-glow)] mb-5 animate-spin"></div>
-            <p className="text-[13.5px] text-[var(--phantom-muted)] text-center">
-              {state === 'loading' ? 'Locating session...' : 'Decrypting locally...'}
-            </p>
-          </motion.div>
-        )}
-
-
-
         {/* Expired / Destroyed */}
         {(state === 'destroyed' || state === 'expired') && (
           <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="panel w-full max-w-md mx-auto text-center py-8">
@@ -247,8 +272,8 @@ export default function AccessDropPage() {
             </h3>
             <p className="text-[13.5px] text-[var(--phantom-muted)] max-w-[340px] mx-auto mb-6">
               {state === 'destroyed' 
-                ? "This was a one-time link and it's already been used. If you were expecting this file, ask the sender for a new session." 
-                : "The sender's timer ran out before this link was opened. Nothing was ever stored longer than that window."}
+                ? "This was a one-time link and it&apos;s already been used. If you were expecting this file, ask the sender for a new session." 
+                : "The sender&apos;s timer ran out before this link was opened. Nothing was ever stored longer than that window."}
             </p>
             <button onClick={() => router.push('/')} className="inline-block bg-transparent hover:bg-[var(--phantom-glow)]/10 text-[var(--phantom-text)] border border-[var(--phantom-border)] hover:border-[var(--phantom-glow)]/30 font-medium px-5 py-2.5 rounded-full transition-colors text-[13.5px]">
               Send a new file instead
@@ -262,7 +287,7 @@ export default function AccessDropPage() {
             <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-5 bg-[var(--phantom-elevated)] border border-[var(--phantom-danger)]/30">
               <svg className="w-[26px] h-[26px] text-[var(--phantom-danger)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M12 9v4M12 17h.01M10.3 3.9L2.7 18a2 2 0 0 0 1.8 3h15a2 2 0 0 0 1.8-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
             </div>
-            <h3 className="font-display text-[20px] font-semibold mb-2 text-[var(--phantom-text)]">Couldn't reach the session</h3>
+            <h3 className="font-display text-[20px] font-semibold mb-2 text-[var(--phantom-text)]">Couldn&apos;t reach the session</h3>
             <p className="text-[13.5px] text-[var(--phantom-muted)] max-w-[340px] mx-auto mb-6">{errorMsg || 'The network dropped mid-request.'}</p>
             <button onClick={() => window.location.reload()} className="inline-block bg-transparent hover:bg-[var(--phantom-glow)]/10 text-[var(--phantom-text)] border border-[var(--phantom-border)] hover:border-[var(--phantom-glow)]/30 font-medium px-5 py-2.5 rounded-full transition-colors text-[13.5px]">
               Retry now
@@ -271,8 +296,6 @@ export default function AccessDropPage() {
         )}
 
       </main>
-
-
     </div>
   );
 }

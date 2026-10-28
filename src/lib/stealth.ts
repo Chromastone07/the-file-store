@@ -1,5 +1,6 @@
-import { PHANTOM_CONFIG } from '@/lib/config';
+import { PHANTOM_CONFIG, WISP_CONFIG } from '@/lib/config';
 import { secureWipe } from '@/lib/crypto';
+import { sessionCache } from '@/lib/sessionCache';
 
 export class StealthEngine {
   private blobUrls: string[] = [];
@@ -7,7 +8,7 @@ export class StealthEngine {
   private inactivityTimer: ReturnType<typeof setTimeout> | null = null;
   private isActive: boolean = false;
 
-  private readonly TIMEOUT_MS = 90 * 1000;
+  private readonly TIMEOUT_MS = WISP_CONFIG.INACTIVITY_TIMEOUT_MS || 90 * 1000;
 
   constructor() {
     this.handleActivity = this.handleActivity.bind(this);
@@ -87,7 +88,7 @@ export class StealthEngine {
       try {
         // Try to securely wipe using crypto utility if it supports ArrayBuffer
         secureWipe(buffer);
-      } catch (e) {
+      } catch {
         // Fallback zero-fill
         new Uint8Array(buffer).fill(0);
       }
@@ -97,8 +98,15 @@ export class StealthEngine {
     if (typeof window !== 'undefined') {
       try {
         window.sessionStorage.clear();
+        window.localStorage.removeItem(PHANTOM_CONFIG.STORAGE_KEYS.SENDER_HISTORY);
+        window.localStorage.removeItem(PHANTOM_CONFIG.STORAGE_KEYS.SESSION_DOCK);
+        window.localStorage.removeItem('phantom_sender_history');
+        window.localStorage.removeItem('phantom_active_dock');
+        window.localStorage.removeItem('wisp_sender_history');
+        window.localStorage.removeItem('wisp_active_dock');
+        sessionCache.clearAll().catch(() => {});
       } catch (e) {
-        console.error('Error clearing sessionStorage', e);
+        console.error('Error clearing storage', e);
       }
     }
   }
@@ -106,7 +114,7 @@ export class StealthEngine {
   public panic(): void {
     this.wipeAll();
     if (typeof window !== 'undefined') {
-      window.location.replace(PHANTOM_CONFIG.PANIC_REDIRECT_URL || 'https://www.wikipedia.org');
+      window.location.replace(PHANTOM_CONFIG.PANIC_REDIRECT_URL || '/');
     }
   }
 

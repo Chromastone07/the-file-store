@@ -2,19 +2,21 @@
 
 import { useCallback, useRef } from 'react';
 import {
-  generateEncryptionKey,
-  exportKeyToBase64,
-  encryptData,
-  encryptText as encryptTextCrypto,
   encryptWithPassword,
   hashString,
+  generateSessionCode,
+  arrayBufferToBase64,
 } from '@/lib/crypto';
-import { uploadEncryptedFile, createDropRecord, createSecureText, destroyDrop, destroySecureText } from '@/lib/supabase';
-import { generateSessionCode } from '@/lib/crypto';
-import { generateShareLink, expiryFromSeconds, sanitizeFilename } from '@/lib/utils';
+import {
+  uploadEncryptedFile,
+  createDropRecord,
+  createSecureText,
+  destroyDrop,
+  destroySecureText,
+} from '@/lib/supabase';
+import { generateShareLink, expiryFromSeconds } from '@/lib/utils';
 import { stripFileMetadata } from '@/lib/metadata';
-import * as fflate from 'fflate';
-import { PHANTOM_CONFIG } from '@/lib/config';
+import { WISP_CONFIG } from '@/lib/config';
 import { useGlobalSession, UploadPhase, UploadResult } from '@/context/GlobalSessionContext';
 import { useSenderHistory } from './useSenderHistory';
 
@@ -30,7 +32,7 @@ interface UploadOptions {
 }
 
 const DEFAULT_OPTIONS: UploadOptions = {
-  expirySeconds: PHANTOM_CONFIG.DEFAULT_EXPIRY_MINUTES * 60,
+  expirySeconds: WISP_CONFIG.DEFAULT_EXPIRY_MINUTES * 60,
   burnAfterReading: false,
   maxViews: null,
   password: null,
@@ -54,6 +56,7 @@ export function useFileUpload(type: 'drop' | 'text' = 'drop') {
   const setError = isDrop ? globalSession.setDropError : globalSession.setTextError;
   const setResult = isDrop ? globalSession.setDropResult : globalSession.setTextResult;
   const reset = isDrop ? globalSession.resetDrop : globalSession.resetText;
+  const addActiveSession = globalSession.addActiveSession;
 
   const uploadFile = useCallback(async (
     fileOrFiles: File | File[],
@@ -72,8 +75,8 @@ export function useFileUpload(type: 'drop' | 'text' = 'drop') {
       const filenames = files.map(f => f.name);
       
       const totalSize = files.reduce((acc, f) => acc + f.size, 0);
-      if (totalSize > PHANTOM_CONFIG.MAX_FILE_SIZE) {
-        throw new Error(`Total size too large. Maximum size is ${PHANTOM_CONFIG.MAX_FILE_SIZE_DISPLAY}.`);
+      if (totalSize > WISP_CONFIG.MAX_FILE_SIZE) {
+        throw new Error(`Total size too large. Maximum size is ${WISP_CONFIG.MAX_FILE_SIZE_DISPLAY}.`);
       }
 
       const rawCode = generateSessionCode();
@@ -150,6 +153,14 @@ export function useFileUpload(type: 'drop' | 'text' = 'drop') {
         expiresAt,
         createdAt: new Date().toISOString(),
       });
+      
+      // Add to SessionDock
+      addActiveSession({
+        type: 'sent_drop',
+        id: rawCode,
+        title: 'Sent File',
+        result: uploadResult
+      });
 
       setResult(uploadResult);
       return uploadResult;
@@ -160,7 +171,7 @@ export function useFileUpload(type: 'drop' | 'text' = 'drop') {
       setError(message);
       return null;
     }
-  }, [setPhase, setProgress, setResult, setError, reset, addHistoryItem]);
+  }, [setPhase, setProgress, setResult, setError, reset, addHistoryItem, addActiveSession]);
 
   const uploadText = useCallback(async (
     text: string,
@@ -179,6 +190,7 @@ export function useFileUpload(type: 'drop' | 'text' = 'drop') {
       
       const encoder = new TextEncoder();
       const data = encoder.encode(text);
+      const textBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
       
       let ciphertext: ArrayBuffer;
       let ivBase64: string;
@@ -186,12 +198,12 @@ export function useFileUpload(type: 'drop' | 'text' = 'drop') {
       
       if (opts.password) {
         const combinedPassword = `${rawCode}-${opts.password}`;
-        const encryptRes = await encryptWithPassword(data.buffer, combinedPassword);
+        const encryptRes = await encryptWithPassword(textBuffer, combinedPassword);
         ciphertext = encryptRes.ciphertext;
         ivBase64 = encryptRes.iv;
         saltBase64 = encryptRes.salt;
       } else {
-        const encryptRes = await encryptWithPassword(data.buffer, rawCode);
+        const encryptRes = await encryptWithPassword(textBuffer, rawCode);
         ciphertext = encryptRes.ciphertext;
         ivBase64 = encryptRes.iv;
         saltBase64 = encryptRes.salt;
@@ -202,8 +214,6 @@ export function useFileUpload(type: 'drop' | 'text' = 'drop') {
       setPhase('uploading');
       const expiresAt = expiryFromSeconds(opts.expirySeconds);
       
-      // Need to convert ArrayBuffer to Base64 to store in DB text column
-      const { arrayBufferToBase64 } = await import('@/lib/crypto');
       const ciphertextBase64 = arrayBufferToBase64(ciphertext);
 
       const { error: dbError } = await createSecureText({
@@ -234,6 +244,14 @@ export function useFileUpload(type: 'drop' | 'text' = 'drop') {
         expiresAt,
         createdAt: new Date().toISOString(),
       });
+      
+      // Add to SessionDock
+      addActiveSession({
+        type: 'sent_text',
+        id: rawCode,
+        title: 'Sent Text',
+        result: uploadResult
+      });
 
       setResult(uploadResult);
       return uploadResult;
@@ -243,7 +261,7 @@ export function useFileUpload(type: 'drop' | 'text' = 'drop') {
       setError(err instanceof Error ? err.message : 'Failed to secure text');
       return null;
     }
-  }, [setPhase, setProgress, setResult, setError, reset, addHistoryItem]);
+  }, [setPhase, setProgress, setResult, setError, reset, addHistoryItem, addActiveSession]);
 
   const abort = useCallback(() => {
     abortRef.current = true;
@@ -254,7 +272,12 @@ export function useFileUpload(type: 'drop' | 'text' = 'drop') {
     const dbLookupCode = await hashString(sessionCode);
     await destroyDrop(dbLookupCode);
     markAsDestroyed(sessionCode);
-    globalSession.resetDrop();
+    
+    // Instead of completely resetting (which makes it disappear to the upload screen),
+    // we mark it as destroyed in the result.
+    if (globalSession.dropResult?.sessionCode === sessionCode) {
+      globalSession.setDropResult({ ...globalSession.dropResult, isDestroyed: true });
+    }
   }, [globalSession, markAsDestroyed]);
 
   const destructText = useCallback(async (sessionCode: string) => {

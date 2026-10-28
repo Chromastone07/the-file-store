@@ -1,4 +1,3 @@
-import { useEffect, useRef, useState } from 'react';
 
 interface AudioViewerProps {
   src: string;

@@ -4,14 +4,19 @@ import { useState, useRef, useEffect } from "react";
 import { ChevronDown } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
-interface CustomSelectProps {
-  value: string | number;
-  onChange: (value: any) => void;
-  options: { label: string; value: string | number }[];
+interface CustomSelectProps<T extends string | number = string | number> {
+  value: T;
+  onChange: (value: T) => void;
+  options: { label: string; value: T }[];
   className?: string;
 }
 
-export default function CustomSelect({ value, onChange, options, className = "" }: CustomSelectProps) {
+export default function CustomSelect<T extends string | number = string | number>({
+  value,
+  onChange,
+  options,
+  className = "",
+}: CustomSelectProps<T>) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 

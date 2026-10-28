@@ -77,12 +77,23 @@ export default function SpreadsheetViewer({ src, filename, viewOnly }: Spreadshe
 
   if (error) {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-4 text-[var(--phantom-danger)] bg-[var(--phantom-danger)]/5 p-8 rounded-xl m-8 border border-[var(--phantom-danger)]/20">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-          <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-        </svg>
-        <p className="font-medium text-lg">{error}</p>
-        <p className="text-sm opacity-80">This file might be corrupted or unsupported.</p>
+      <div className="flex flex-col items-center justify-center h-full gap-3 text-[var(--wisp-text)] p-8 rounded-xl m-8 text-center max-w-md mx-auto">
+        <div className="w-14 h-14 rounded-2xl bg-amber-500/10 text-amber-400 flex items-center justify-center">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+        </div>
+        <p className="font-semibold text-sm text-[var(--wisp-text)]">{error}</p>
+        <p className="text-xs text-[var(--wisp-muted)]">This spreadsheet format is decrypted in memory and ready to open locally.</p>
+        {!viewOnly && (
+          <a
+            href={src}
+            download={filename}
+            className="mt-2 flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[var(--wisp-glow)] hover:bg-[var(--wisp-accent)] text-white text-xs font-semibold shadow-md transition-all cursor-pointer"
+          >
+            Download {filename}
+          </a>
+        )}
       </div>
     );
   }

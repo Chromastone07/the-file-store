@@ -27,7 +27,7 @@ export default function SpotlightCard({ children, className = "", ...props }: Sp
       className={`glass-panel spotlight-wrapper rounded-2xl ${className}`}
       {...props}
     >
-      <div className="relative z-10 w-full h-full">
+      <div className="relative z-10 w-full h-full flex flex-col min-h-0">
         {children}
       </div>
     </motion.div>

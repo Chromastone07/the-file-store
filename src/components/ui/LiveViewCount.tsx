@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase';
+import { supabase, getDropsByLookupCode, getSecureTextByCode } from '@/lib/supabase';
 import { hashString } from '@/lib/crypto';
 import { Eye } from 'lucide-react';
 
@@ -10,34 +10,34 @@ export default function LiveViewCount({ sessionCode, type }: { sessionCode: stri
 
   useEffect(() => {
     let active = true;
-    let dbCode = '';
     const table = type === 'drop' ? 'drops' : 'secure_texts';
 
     const fetchViews = async () => {
       try {
         const dbLookupCode = await hashString(sessionCode);
-        dbCode = dbLookupCode;
         if (!active) return;
         
-        let query = supabase.from(table).select('view_count');
         if (type === 'drop') {
-          query = query.or(`session_code.eq.${dbLookupCode},group_code.eq.${dbLookupCode}`);
+          const { data } = await getDropsByLookupCode(dbLookupCode);
+          if (data && active) {
+            const totalViews = data.reduce((sum, row) => sum + (row.view_count || 0), 0);
+            setViewCount(totalViews);
+          }
         } else {
-          query = query.eq('session_code', dbLookupCode);
+          const { data } = await getSecureTextByCode(dbLookupCode);
+          if (data && active) {
+            setViewCount(data.view_count || 0);
+          }
         }
-
-        const { data } = await query;
-        if (data) {
-          const totalViews = data.reduce((sum, row) => sum + (row.view_count || 0), 0);
-          setViewCount(totalViews);
-        }
-      } catch (e) {}
+      } catch {
+        // Silent fail for polling
+      }
     };
 
     fetchViews();
     
-    // Fallback polling (slow)
-    const interval = setInterval(fetchViews, 10000);
+    // Fallback polling
+    const interval = setInterval(fetchViews, 8000);
 
     // Setup Realtime
     const channel = supabase
@@ -60,9 +60,9 @@ export default function LiveViewCount({ sessionCode, type }: { sessionCode: stri
 
   return (
     <div className="flex flex-col items-center">
-      <span className="text-[var(--phantom-muted)] text-xs font-semibold uppercase tracking-wider mb-0.5">Views / Downloads</span>
-      <span className="flex items-center gap-1.5 font-mono text-sm font-medium">
-        <Eye className="w-3.5 h-3.5 text-[var(--phantom-glow)]" /> 
+      <span className="text-[var(--wisp-muted)] text-xs font-semibold uppercase tracking-wider mb-0.5">Views / Downloads</span>
+      <span className="flex items-center gap-1.5 font-mono text-sm font-semibold text-[var(--wisp-text)]">
+        <Eye className="w-3.5 h-3.5 text-[var(--wisp-glow)]" /> 
         {viewCount}
       </span>
     </div>

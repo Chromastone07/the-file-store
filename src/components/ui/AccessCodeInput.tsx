@@ -84,6 +84,10 @@ export default function AccessCodeInput({
           onPaste={handlePaste}
           onFocus={() => setActiveBox(index)}
           disabled={disabled}
+          autoCapitalize="characters"
+          autoCorrect="off"
+          autoComplete="off"
+          spellCheck="false"
           className={`w-12 h-14 bg-[var(--phantom-elevated)] border border-[var(--phantom-border)] rounded-[0.75rem] flex items-center justify-center text-center text-xl font-bold font-mono text-[var(--phantom-text)] transition-all outline-none disabled:opacity-50
           ${activeBox === index ? 'ring-2 ring-[var(--phantom-glow)] border-transparent' : 'focus:ring-2 focus:ring-[var(--phantom-glow)]'}`}
         />

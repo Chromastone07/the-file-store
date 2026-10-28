@@ -1,15 +1,15 @@
 "use client";
 
 import { useState } from 'react';
+import { ZoomIn, ZoomOut } from 'lucide-react';
 
 interface ImageViewerProps {
   src: string;       // blob URL of decrypted image
   filename: string;
-  onClose?: () => void;
   viewOnly?: boolean; // burn-after-reading: no download
 }
 
-export default function ImageViewer({ src, filename, onClose, viewOnly = false }: ImageViewerProps) {
+export default function ImageViewer({ src, filename, viewOnly = false }: ImageViewerProps) {
   const [zoom, setZoom] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -40,60 +40,11 @@ export default function ImageViewer({ src, filename, onClose, viewOnly = false }
   };
 
   return (
-    <div className="flex flex-col h-full w-full">
-      {/* Toolbar */}
-      <div
-        className="flex items-center justify-between px-4 py-3 border-b"
-        style={{ borderColor: 'var(--phantom-border)', background: 'var(--phantom-surface)' }}
-      >
-        <span className="text-sm font-medium truncate max-w-[50%]" style={{ color: 'var(--phantom-text)' }}>
-          {filename}
-        </span>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setZoom(z => Math.max(0.25, z - 0.25))}
-            className="px-2 py-1 rounded text-sm transition-colors hover:opacity-80"
-            style={{ background: 'var(--phantom-elevated)', color: 'var(--phantom-text)' }}
-            aria-label="Zoom out"
-          >
-            −
-          </button>
-          <span className="text-xs font-mono min-w-[3rem] text-center" style={{ color: 'var(--phantom-muted)' }}>
-            {Math.round(zoom * 100)}%
-          </span>
-          <button
-            onClick={() => setZoom(z => Math.min(5, z + 0.25))}
-            className="px-2 py-1 rounded text-sm transition-colors hover:opacity-80"
-            style={{ background: 'var(--phantom-elevated)', color: 'var(--phantom-text)' }}
-            aria-label="Zoom in"
-          >
-            +
-          </button>
-          <button
-            onClick={resetView}
-            className="px-2 py-1 rounded text-xs transition-colors hover:opacity-80"
-            style={{ background: 'var(--phantom-elevated)', color: 'var(--phantom-muted)' }}
-          >
-            Reset
-          </button>
-          {!viewOnly && (
-            <a
-              href={src}
-              download={filename}
-              className="px-3 py-1 rounded text-xs font-medium transition-colors"
-              style={{ background: 'var(--phantom-glow)', color: '#fff' }}
-            >
-              Download
-            </a>
-          )}
-        </div>
-      </div>
-
+    <div className="flex flex-col h-full w-full relative bg-[#121316] select-none">
       {/* Image viewport */}
       <div
-        className="flex-1 overflow-hidden flex items-center justify-center"
+        className="flex-1 min-h-0 overflow-hidden flex items-center justify-center relative"
         style={{
-          background: 'var(--phantom-bg)',
           cursor: zoom > 1 ? (isDragging ? 'grabbing' : 'grab') : 'default',
         }}
         onWheel={handleWheel}
@@ -102,11 +53,12 @@ export default function ImageViewer({ src, filename, onClose, viewOnly = false }
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
       >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={src}
           alt={filename}
           draggable={false}
-          className="max-w-full max-h-full object-contain select-none transition-transform duration-150"
+          className="max-w-full max-h-full object-contain select-none transition-transform duration-150 p-2 sm:p-4"
           style={{
             transform: `translate(${position.x}px, ${position.y}px) scale(${zoom})`,
             ...(viewOnly ? { pointerEvents: 'none' as const } : {}),
@@ -115,12 +67,44 @@ export default function ImageViewer({ src, filename, onClose, viewOnly = false }
         />
       </div>
 
-      {viewOnly && (
-        <div
-          className="text-center py-2 text-xs font-medium"
-          style={{ background: 'var(--phantom-danger)', color: '#fff' }}
+      {/* Floating Bottom Zoom Pill */}
+      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[var(--wisp-surface)]/90 backdrop-blur-md border border-[var(--wisp-border)] shadow-xl text-xs text-[var(--wisp-text)]">
+        <button
+          onClick={() => setZoom(z => Math.max(0.25, z - 0.25))}
+          className="p-1 rounded-lg hover:bg-[var(--wisp-elevated)] transition-colors"
+          title="Zoom out"
+          aria-label="Zoom out"
         >
-          🔥 View Only — This file will be destroyed after this session
+          <ZoomOut className="w-3.5 h-3.5" />
+        </button>
+
+        <span className="text-[11px] font-mono min-w-[3rem] text-center font-medium">
+          {Math.round(zoom * 100)}%
+        </span>
+
+        <button
+          onClick={() => setZoom(z => Math.min(5, z + 0.25))}
+          className="p-1 rounded-lg hover:bg-[var(--wisp-elevated)] transition-colors"
+          title="Zoom in"
+          aria-label="Zoom in"
+        >
+          <ZoomIn className="w-3.5 h-3.5" />
+        </button>
+
+        <div className="w-[1px] h-3 bg-[var(--wisp-border)] mx-0.5" />
+
+        <button
+          onClick={resetView}
+          className="px-2 py-0.5 rounded text-[11px] text-[var(--wisp-muted)] hover:text-[var(--wisp-text)] hover:bg-[var(--wisp-elevated)] transition-colors"
+          title="Reset zoom"
+        >
+          Reset
+        </button>
+      </div>
+
+      {viewOnly && (
+        <div className="bg-rose-950/80 border-t border-rose-500/20 text-rose-300 text-center py-1.5 px-3 text-[11px] font-medium shrink-0">
+          Burn on view active. File is held in memory for this session only.
         </div>
       )}
     </div>

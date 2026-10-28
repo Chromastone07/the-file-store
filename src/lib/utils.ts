@@ -1,4 +1,4 @@
-// PHANTOM — Shared Utilities
+// Phantom - Shared Utilities
 
 // ─── File Categories ─────────────────────────────────────────
 
@@ -6,29 +6,32 @@ export type FileCategory = 'image' | 'video' | 'audio' | 'pdf' | 'code' | 'docum
 
 const FILE_CATEGORIES: Record<string, FileCategory> = {
   // Images
-  jpg: 'image', jpeg: 'image', png: 'image', gif: 'image', webp: 'image', svg: 'image', bmp: 'image', ico: 'image', avif: 'image',
+  jpg: 'image', jpeg: 'image', png: 'image', gif: 'image', webp: 'image', svg: 'image', bmp: 'image', ico: 'image', avif: 'image', tiff: 'image', tif: 'image', heic: 'image',
   // Video
-  mp4: 'video', webm: 'video', mov: 'video', avi: 'video', mkv: 'video', m4v: 'video',
+  mp4: 'video', webm: 'video', mov: 'video', avi: 'video', mkv: 'video', m4v: 'video', ogv: 'video', '3gp': 'video',
   // Audio
-  mp3: 'audio', wav: 'audio', ogg: 'audio', flac: 'audio', m4a: 'audio', aac: 'audio',
+  mp3: 'audio', wav: 'audio', ogg: 'audio', flac: 'audio', m4a: 'audio', aac: 'audio', wma: 'audio', opus: 'audio', aiff: 'audio',
   // PDF
   pdf: 'pdf',
-  // Code
-  js: 'code', jsx: 'code', ts: 'code', tsx: 'code', py: 'code', java: 'code', c: 'code', cpp: 'code',
-  h: 'code', hpp: 'code', cs: 'code', go: 'code', rs: 'code', rb: 'code', php: 'code',
-  swift: 'code', kt: 'code', scala: 'code', r: 'code', sql: 'code', sh: 'code', bash: 'code',
-  html: 'code', css: 'code', scss: 'code', less: 'code', json: 'code', xml: 'code', yaml: 'code', yml: 'code',
-  toml: 'code', ini: 'code', cfg: 'code', env: 'code', gitignore: 'code', dockerfile: 'code',
-  makefile: 'code', cmake: 'code', gradle: 'code',
-  // Documents
-  txt: 'document', md: 'document', rtf: 'document', log: 'document', csv: 'document',
-  doc: 'document', docx: 'document',
-  // Presentations
-  ppt: 'presentation', pptx: 'presentation', key: 'presentation',
   // Spreadsheets
-  xls: 'spreadsheet', xlsx: 'spreadsheet',
+  xls: 'spreadsheet', xlsx: 'spreadsheet', csv: 'spreadsheet', tsv: 'spreadsheet', ods: 'spreadsheet',
+  // Documents & Office
+  doc: 'document', docx: 'document', rtf: 'document', odt: 'document', txt: 'document', md: 'document', markdown: 'document', log: 'document', text: 'document', diff: 'document', patch: 'document',
+  // Presentations
+  ppt: 'presentation', pptx: 'presentation', key: 'presentation', odp: 'presentation',
   // Archives
-  zip: 'archive', rar: 'archive', '7z': 'archive', tar: 'archive', gz: 'archive',
+  zip: 'archive', rar: 'archive', '7z': 'archive', tar: 'archive', gz: 'archive', bz2: 'archive', xz: 'archive',
+  // Code & Developer Files
+  js: 'code', jsx: 'code', ts: 'code', tsx: 'code', mjs: 'code', cjs: 'code',
+  py: 'code', pyw: 'code', java: 'code', c: 'code', cpp: 'code', cc: 'code', cxx: 'code',
+  h: 'code', hpp: 'code', cs: 'code', go: 'code', rs: 'code', rb: 'code', php: 'code',
+  swift: 'code', kt: 'code', kts: 'code', scala: 'code', r: 'code', sql: 'code', sh: 'code', bash: 'code', zsh: 'code',
+  html: 'code', htm: 'code', css: 'code', scss: 'code', sass: 'code', less: 'code',
+  json: 'code', jsonc: 'code', xml: 'code', yaml: 'code', yml: 'code',
+  toml: 'code', ini: 'code', cfg: 'code', conf: 'code', env: 'code', gitignore: 'code', gitattributes: 'code',
+  dockerfile: 'code', makefile: 'code', cmake: 'code', gradle: 'code',
+  lua: 'code', dart: 'code', perl: 'code', pl: 'code', graphql: 'code', gql: 'code',
+  svelte: 'code', vue: 'code', astro: 'code',
 };
 
 /** Get the category of a file based on its extension */
@@ -45,21 +48,24 @@ export function getFileExtension(filename: string): string {
 /** Check if a file can be previewed in-browser */
 export function isPreviewable(filename: string): boolean {
   const category = getFileCategory(filename);
-  return ['image', 'video', 'audio', 'pdf', 'code', 'document', 'spreadsheet', 'presentation'].includes(category);
+  return ['image', 'video', 'audio', 'pdf', 'code', 'document', 'spreadsheet', 'presentation', 'archive'].includes(category);
 }
 
 // ─── Prism.js Language Mapping ───────────────────────────────
 
 const PRISM_LANGUAGE_MAP: Record<string, string> = {
-  js: 'javascript', jsx: 'jsx', ts: 'typescript', tsx: 'tsx',
-  py: 'python', java: 'java', c: 'c', cpp: 'cpp', cs: 'csharp',
+  js: 'javascript', jsx: 'jsx', ts: 'typescript', tsx: 'tsx', mjs: 'javascript', cjs: 'javascript',
+  py: 'python', pyw: 'python', java: 'java', c: 'c', cpp: 'cpp', cc: 'cpp', cxx: 'cpp',
+  h: 'c', hpp: 'cpp', cs: 'csharp',
   go: 'go', rs: 'rust', rb: 'ruby', php: 'php', swift: 'swift',
-  kt: 'kotlin', scala: 'scala', r: 'r', sql: 'sql',
-  sh: 'bash', bash: 'bash',
-  html: 'html', css: 'css', scss: 'scss', less: 'less',
-  json: 'json', xml: 'xml', yaml: 'yaml', yml: 'yaml',
-  toml: 'toml', ini: 'ini', dockerfile: 'docker',
-  md: 'markdown', txt: 'text',
+  kt: 'kotlin', kts: 'kotlin', scala: 'scala', r: 'r', sql: 'sql',
+  sh: 'bash', bash: 'bash', zsh: 'bash',
+  html: 'html', htm: 'html', css: 'css', scss: 'scss', sass: 'scss', less: 'less',
+  json: 'json', jsonc: 'json', xml: 'xml', yaml: 'yaml', yml: 'yaml',
+  toml: 'toml', ini: 'ini', cfg: 'ini', conf: 'ini', env: 'bash',
+  dockerfile: 'docker', makefile: 'makefile',
+  md: 'markdown', markdown: 'markdown', txt: 'text', text: 'text',
+  diff: 'diff', patch: 'diff',
 };
 
 /** Get the Prism.js language identifier for syntax highlighting */
@@ -166,8 +172,15 @@ export function expiryFromSeconds(seconds: number): string {
   return date.toISOString();
 }
 
-/** Sanitize filename — remove identifying patterns */
+/** Sanitize filename - remove dangerous path separators, null bytes, and control characters */
 export function sanitizeFilename(name: string): string {
-  // Return original filename to preserve identity as requested
-  return name;
+  if (!name) return 'downloaded_file';
+  // Strip null bytes, control characters, and path traversal sequences
+  const sanitized = name
+    .replace(/\0/g, '')
+    .replace(/[\x00-\x1f\x7f]/g, '')
+    .replace(/^[./\\]+/, '')
+    .replace(/[/\\]/g, '_')
+    .trim();
+  return sanitized || 'downloaded_file';
 }

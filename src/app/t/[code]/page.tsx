@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { decryptWithPassword, decryptText, hashString } from '@/lib/crypto';
+import { decryptWithPassword, hashString } from '@/lib/crypto';
 import { getSecureTextByCode, recordTextView, destroyExpiredText, supabase } from '@/lib/supabase';
 import { extractKeyFromFragment } from '@/lib/utils';
 import Navbar from '@/components/layout/Navbar';
@@ -12,17 +12,28 @@ import CountdownTimer from '@/components/ui/CountdownTimer';
 import { Copy, Flame, ShieldCheck, AlertTriangle, Loader2, Key } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
+import { useGlobalSession } from '@/context/GlobalSessionContext';
+import { sessionCache } from '@/lib/sessionCache';
 
 type AccessState = 'loading' | 'key-required' | 'password-required' | 'ready' | 'destroyed' | 'error' | 'expired';
+
+interface SecureTextMetadata {
+  session_code: string;
+  has_password?: boolean;
+  burn_after_reading?: boolean;
+  expires_at: string;
+  is_destroyed?: boolean;
+}
 
 export default function TextRetrievalPage() {
   const params = useParams();
   const code = Array.isArray(params?.code) ? params.code[0] : params?.code;
+  const { addActiveSession, removeActiveSession } = useGlobalSession();
   
   const [state, setState] = useState<AccessState>('loading');
   const [error, setError] = useState<string | null>(null);
   const [decryptedText, setDecryptedText] = useState<string | null>(null);
-  const [metadata, setMetadata] = useState<any>(null);
+  const [metadata, setMetadata] = useState<SecureTextMetadata | null>(null);
   const [manualKey, setManualKey] = useState('');
   const [password, setPassword] = useState('');
   const dbLookupCodeRef = useRef<string>('');
@@ -35,13 +46,18 @@ export default function TextRetrievalPage() {
     setDecryptedText(null);
     setMetadata(null);
     setState('expired');
+    if (code) {
+      const upper = code.toUpperCase();
+      removeActiveSession(upper);
+      sessionCache.removeSession(upper);
+    }
     // Trigger server-side cleanup
     if (dbLookupCodeRef.current) {
       destroyExpiredText(dbLookupCodeRef.current).catch(() => {});
     }
-  }, []);
+  }, [code, removeActiveSession]);
 
-  const performDecryption = async (providedPassword?: string) => {
+  const performDecryption = useCallback(async (providedPassword?: string) => {
     try {
       if (!code) throw new Error('Invalid code');
       
@@ -103,37 +119,55 @@ export default function TextRetrievalPage() {
       setMetadata(textData);
       setState('ready');
 
+      // Keep in Active Sessions so receiver can reaccess it anytime
+      addActiveSession({
+        type: 'text',
+        id: rawCode,
+        title: `SECURE NOTE (${rawCode})`,
+        text: plaintextObj,
+        expiresAt: textData.expires_at,
+        burnAfterReading: !!textData.burn_after_reading,
+        drop: textData,
+      });
+
+      // Cache locally if burn after reading is false
+      if (!textData.burn_after_reading) {
+        sessionCache.saveText(
+          rawCode,
+          `SECURE NOTE (${rawCode})`,
+          plaintextObj,
+          textData.expires_at,
+          false
+        ).catch(console.error);
+      }
+
       // SECURITY: Scrub the session code from the URL bar
       if (typeof window !== 'undefined') {
         window.history.replaceState(null, '', `/t/accessed`);
       }
       
-      recordTextView(dbLookupCode, textData.burn_after_reading).catch(console.error);
-    } catch (err: any) {
-      console.error('Decryption error:', err.message || err);
-      setError(err.message || 'Failed to decrypt');
+      recordTextView(dbLookupCode, !!textData.burn_after_reading).catch(console.error);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to decrypt';
+      console.error('Decryption error:', message);
+      setError(message);
       setState('error');
     }
-  };
+  }, [code, manualKey, addActiveSession]);
 
   useEffect(() => {
-    const init = async () => {
-      // Hashed routing doesn't need keyBase64 at all.
-      await performDecryption();
-    };
-
-    init();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [code]);
+    performDecryption();
+  }, [performDecryption]);
 
   // Real-time subscription + polling fallback for purge detection
   useEffect(() => {
-    if (!dbLookupCodeRef.current || state === 'destroyed' || state === 'loading') return;
+    const currentCode = dbLookupCodeRef.current;
+    if (!currentCode || state === 'destroyed' || state === 'loading') return;
     
     // Polling fallback: check every 5 seconds
     const pollInterval = setInterval(async () => {
       try {
-        const { data } = await getSecureTextByCode(dbLookupCodeRef.current);
+        const { data } = await getSecureTextByCode(currentCode);
         if (!data || data.is_destroyed) {
           setState('destroyed');
           setDecryptedText(null);
@@ -143,16 +177,18 @@ export default function TextRetrievalPage() {
           handleExpired();
           clearInterval(pollInterval);
         }
-      } catch {}
+      } catch {
+        // Ignored in background polling
+      }
     }, 5000);
 
     // Also try Supabase Realtime
     const channel = supabase
-      .channel(`text-watch-${dbLookupCodeRef.current}`)
+      .channel(`text-watch-${currentCode}`)
       .on(
         'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'secure_texts', filter: `session_code=eq.${dbLookupCodeRef.current}` },
-        (payload: any) => {
+        { event: 'UPDATE', schema: 'public', table: 'secure_texts', filter: `session_code=eq.${currentCode}` },
+        (payload: { new?: { is_destroyed?: boolean } }) => {
           if (payload.new?.is_destroyed) setState('destroyed');
         }
       )
@@ -162,14 +198,20 @@ export default function TextRetrievalPage() {
       clearInterval(pollInterval);
       supabase.removeChannel(channel);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dbLookupCodeRef.current, state]);
+  }, [state, handleExpired]);
 
   const handleKeySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!manualKey) return;
     setState('loading');
     await performDecryption(manualKey.replace(/^#/, ''));
+  };
+
+  const handlePasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!password) return;
+    setState('loading');
+    await performDecryption(password);
   };
 
   const handleCopy = () => {
@@ -189,6 +231,37 @@ export default function TextRetrievalPage() {
       );
     }
 
+    if (state === 'password-required') {
+      return (
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md mx-auto">
+          <div className="text-center mb-6">
+            <div className="w-16 h-16 bg-[var(--phantom-elevated)] rounded-full flex items-center justify-center mx-auto mb-4">
+              <Key className="w-8 h-8 text-[var(--phantom-glow)]" />
+            </div>
+            <h2 className="text-xl font-bold text-[var(--phantom-text)]">Password Required</h2>
+            <p className="text-[var(--phantom-muted)] text-sm mt-2">This secure text is protected with an extra password layer.</p>
+          </div>
+          <form onSubmit={handlePasswordSubmit} className="space-y-4">
+            <input
+              type="password"
+              placeholder="Enter secure password..."
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full bg-[var(--phantom-surface)] border border-[var(--phantom-border)] rounded-lg px-4 py-3 focus:outline-none focus:border-[var(--phantom-glow)] text-sm text-[var(--phantom-text)]"
+              autoFocus
+            />
+            <button
+              type="submit"
+              disabled={!password}
+              className="w-full bg-[var(--phantom-glow)] hover:bg-[var(--phantom-accent)] text-white font-medium py-3 rounded-lg transition-colors disabled:opacity-50"
+            >
+              Unlock Text
+            </button>
+          </form>
+        </motion.div>
+      );
+    }
+
     if (state === 'key-required') {
       return (
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md mx-auto">
@@ -205,7 +278,7 @@ export default function TextRetrievalPage() {
               placeholder="Paste decryption key or full link..."
               value={manualKey}
               onChange={(e) => setManualKey(e.target.value)}
-              className="w-full bg-[var(--phantom-surface)] border border-[var(--phantom-border)] rounded-lg px-4 py-3 focus:outline-none focus:border-[var(--phantom-glow)] font-mono text-sm"
+              className="w-full bg-[var(--phantom-surface)] border border-[var(--phantom-border)] rounded-lg px-4 py-3 focus:outline-none focus:border-[var(--phantom-glow)] font-mono text-sm text-[var(--phantom-text)]"
               autoFocus
             />
             <button
@@ -303,6 +376,46 @@ export default function TextRetrievalPage() {
           <pre className="w-full bg-[var(--phantom-elevated)] border border-[var(--phantom-border)] rounded-xl p-6 text-[var(--phantom-text)] whitespace-pre-wrap break-words overflow-x-auto text-sm sm:text-base font-mono custom-scrollbar min-h-[12rem]">
             {decryptedText}
           </pre>
+        </div>
+
+        {/* Receiver actions & status */}
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 border-t border-[var(--phantom-border)] text-xs text-[var(--phantom-muted)]">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            {metadata?.burn_after_reading ? (
+              <span className="text-rose-400 font-medium">Single-view session: Auto-wipes when closed</span>
+            ) : (
+              <span className="text-emerald-400 font-medium">Saved in Active Sessions: Reopenable anytime</span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            {metadata?.burn_after_reading ? (
+              <button
+                onClick={() => {
+                  if (code) {
+                    const upper = code.toUpperCase();
+                    removeActiveSession(upper);
+                    sessionCache.removeSession(upper);
+                  }
+                  if (dbLookupCodeRef.current) {
+                    destroyExpiredText(dbLookupCodeRef.current).catch(() => {});
+                  }
+                  setState('destroyed');
+                }}
+                className="px-4 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-xl font-medium transition-colors cursor-pointer"
+              >
+                Destroy Note Now
+              </button>
+            ) : (
+              <Link
+                href="/"
+                className="px-4 py-2 bg-[var(--phantom-elevated)] hover:bg-[var(--phantom-surface)] border border-[var(--phantom-border)] text-[var(--phantom-text)] rounded-xl font-medium transition-colors"
+              >
+                Return to Home
+              </Link>
+            )}
+          </div>
         </div>
       </motion.div>
     );

@@ -62,7 +62,13 @@ export default function AnimatedBackground() {
     canvas.width = width;
     canvas.height = height;
 
-    const particleCount = Math.floor((width * height) / 12000); // Responsive particle count
+    const isMobile = width < 768;
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (prefersReducedMotion) return;
+
+    // Lighter particle density on mobile to preserve CPU and battery
+    const divisor = isMobile ? 24000 : 12000;
+    const particleCount = Math.floor((width * height) / divisor);
     const particles: Particle[] = [];
     for (let i = 0; i < particleCount; i++) {
       particles.push(new Particle(width, height));
@@ -83,6 +89,17 @@ export default function AnimatedBackground() {
 
     window.addEventListener('mousemove', onMouseMove);
     document.addEventListener('mouseleave', onMouseLeave);
+
+    let isTabVisible = !document.hidden;
+    const onVisibilityChange = () => {
+      isTabVisible = !document.hidden;
+      if (isTabVisible) {
+        animationFrameId = requestAnimationFrame(render);
+      } else {
+        cancelAnimationFrame(animationFrameId);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
 
     const onResize = () => {
       width = window.innerWidth;
@@ -108,12 +125,25 @@ export default function AnimatedBackground() {
       return defaultRgb;
     };
 
+    let isLight = document.documentElement.getAttribute('data-theme') === 'light';
+    let glowRgb = getVarColor('--phantom-glow', isLight ? '59, 130, 246' : '99, 102, 241');
+
+    const updateThemeColors = () => {
+      isLight = document.documentElement.getAttribute('data-theme') === 'light';
+      glowRgb = getVarColor('--phantom-glow', isLight ? '59, 130, 246' : '99, 102, 241');
+    };
+
+    const themeObserver = new MutationObserver(() => {
+      updateThemeColors();
+    });
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme', 'class'],
+    });
+
     let animationFrameId: number;
 
     const render = () => {
-      // Re-fetch color every frame to support dynamic theme switching (light/dark mode toggle)
-      const isLight = document.documentElement.getAttribute('data-theme') === 'light';
-      const glowRgb = getVarColor('--phantom-glow', isLight ? '59, 130, 246' : '99, 102, 241');
       const particleColor = `rgba(${glowRgb}, 0.6)`;
       const connectionDist = 120;
       const mouseConnectionDist = 180;
@@ -168,6 +198,8 @@ export default function AnimatedBackground() {
     render();
 
     return () => {
+      themeObserver.disconnect();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('mousemove', onMouseMove);
       document.addEventListener('mouseleave', onMouseLeave);
       window.removeEventListener('resize', onResize);
@@ -182,21 +214,26 @@ export default function AnimatedBackground() {
         className="absolute inset-0 w-full h-full"
       />
       
-      {/* Fallback ambient glows just in case */}
+      {/* Rich ambient glowing orbs to backlight transparent frosted glass */}
       <div 
-        className="absolute w-[40vw] h-[40vw] rounded-full top-[-15%] right-[-15%]"
+        className="absolute w-[50vw] h-[50vw] max-w-[650px] max-h-[650px] rounded-full top-[-10%] right-[-5%] pointer-events-none"
         style={{
-          background: 'var(--phantom-glow)',
-          opacity: 0.03,
-          filter: 'blur(120px)',
+          background: 'radial-gradient(circle, rgba(99, 102, 241, 0.15) 0%, rgba(139, 92, 246, 0.08) 50%, transparent 75%)',
+          filter: 'blur(90px)',
         }}
       />
       <div 
-        className="absolute w-[35vw] h-[35vw] rounded-full bottom-[-15%] left-[-15%]"
+        className="absolute w-[45vw] h-[45vw] max-w-[600px] max-h-[600px] rounded-full bottom-[-10%] left-[-5%] pointer-events-none"
         style={{
-          background: 'var(--phantom-accent)',
-          opacity: 0.02,
-          filter: 'blur(150px)',
+          background: 'radial-gradient(circle, rgba(129, 140, 248, 0.12) 0%, rgba(56, 189, 248, 0.07) 50%, transparent 75%)',
+          filter: 'blur(100px)',
+        }}
+      />
+      <div 
+        className="absolute w-[35vw] h-[35vw] max-w-[450px] max-h-[450px] rounded-full top-[35%] left-[30%] pointer-events-none"
+        style={{
+          background: 'radial-gradient(circle, rgba(168, 85, 247, 0.08) 0%, transparent 70%)',
+          filter: 'blur(110px)',
         }}
       />
     </div>

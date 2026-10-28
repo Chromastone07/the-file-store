@@ -8,364 +8,270 @@ import Navbar from "@/components/layout/Navbar";
 import Footer from "@/components/layout/Footer";
 import AnimatedBackground from "@/components/layout/AnimatedBackground";
 import SpotlightCard from "@/components/ui/SpotlightCard";
-import { supabase } from "@/lib/supabase";
-import { RefreshCw } from "lucide-react";
+import { getClipboardSession, getSecureTextByCode } from "@/lib/supabase";
+import { useGlobalSession } from "@/context/GlobalSessionContext";
+import { RefreshCw, ShieldCheck, EyeOff, Flame, Ghost, Layers, FileCheck, QrCode } from "lucide-react";
 
 export default function Home() {
   const router = useRouter();
-  const [heroCode, setHeroCode] = useState("");
-  const [bottomCode, setBottomCode] = useState("");
+  const { openQRScanner } = useGlobalSession();
+  const [accessCode, setAccessCode] = useState("");
   const [isRouting, setIsRouting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
 
   const handleRouting = async (code: string) => {
-    const trimmed = code.trim();
-    if (trimmed.length !== 6 && trimmed.length !== 8) return;
+    const trimmed = code.trim().toUpperCase();
+    if (trimmed.length !== 6 && trimmed.length !== 8) {
+      setErrorMessage("Enter an 8-character access code (or 6-character legacy code)");
+      return;
+    }
     
+    setErrorMessage("");
     setIsRouting(true);
-    const upperCode = trimmed.toUpperCase();
     
     try {
-      // 1. Check Chat Sessions
-      const { data: chatData } = await supabase
-        .from('clipboard_sessions')
-        .select('session_code')
-        .eq('session_code', upperCode)
-        .limit(1);
-        
-      if (chatData && chatData.length > 0) {
-        router.push(`/chat?join=${upperCode}`);
+      // 1. Check Chat / Clipboard Sessions via RPC
+      const { data: chatData } = await getClipboardSession(trimmed);
+      if (chatData && chatData.session_code) {
+        router.push(`/chat?join=${trimmed}`);
         return;
       }
 
-      let dbLookupCode = upperCode;
-      if (upperCode.length !== 6) { // non-legacy codes are hashed
-        const { hashString } = await import('@/lib/crypto');
-        dbLookupCode = await hashString(upperCode);
+      let dbLookupCode = trimmed;
+      if (trimmed.length !== 6) {
+        const { hashString } = await import("@/lib/crypto");
+        dbLookupCode = await hashString(trimmed);
       }
 
-      // 2. Check Text Sessions
-      const { data } = await supabase
-        .from('secure_texts')
-        .select('id')
-        .eq('session_code', dbLookupCode)
-        .limit(1);
-        
-      if (data && data.length > 0) {
-        router.push(`/t/${upperCode}`);
+      // 2. Check Text Sessions via RPC
+      const { data: textData } = await getSecureTextByCode(dbLookupCode);
+      if (textData && !textData.is_destroyed) {
+        router.push(`/t/${trimmed}`);
         return;
       }
     } catch (e) {
       console.error("Routing check failed", e);
     }
     
-    // Default to file drop if not found in texts
-    router.push(`/d/${upperCode}`);
+    // Default to file drop route
+    router.push(`/d/${trimmed}`);
   };
 
-  const handleHeroSubmit = (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (isRouting) return;
-    handleRouting(heroCode);
-  };
-
-  const handleBottomSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (isRouting) return;
-    handleRouting(bottomCode);
-  };
-
-  const containerVariants = {
-    hidden: { opacity: 0 },
-    visible: {
-      opacity: 1,
-      transition: {
-        staggerChildren: 0.1,
-      },
-    },
-  };
-
-  const itemVariants = {
-    hidden: { opacity: 0, y: 20 },
-    visible: { opacity: 1, y: 0, transition: { duration: 0.5, ease: "easeOut" as const } },
+    handleRouting(accessCode);
   };
 
   return (
-    <div className="relative min-h-screen flex flex-col font-sans text-[var(--phantom-text)]">
+    <div className="relative min-h-screen flex flex-col font-sans text-[var(--wisp-text)]">
       <AnimatedBackground />
       <Navbar />
 
-      <main className="flex-grow z-10">
-        {/* 1. Hero Section */}
-        <section className="relative pt-32 pb-20 px-6 lg:pt-48 lg:pb-32 overflow-hidden">
+      <main className="flex-grow z-10 flex flex-col">
+        {/* 1. Hero Section - Clean, minimal hero as requested */}
+        <section className="min-h-[calc(100dvh-var(--header-h)-var(--footer-h)-var(--tabbar-h))] flex flex-col justify-center items-center px-4 py-8 md:py-12 max-w-4xl mx-auto w-full text-center">
           <motion.div
-            className="max-w-4xl mx-auto text-center"
-            variants={containerVariants}
-            initial="hidden"
-            animate="visible"
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4 }}
+            className="w-full flex flex-col items-center"
           >
-            <motion.h1
-              variants={itemVariants}
-              className="text-5xl md:text-7xl font-extrabold tracking-tight mb-6 leading-tight"
-            >
-              <span className="block">Share anything.</span>
-              <motion.span
-                animate={{ backgroundPosition: ["0% 50%", "100% 50%", "0% 50%"] }}
-                transition={{ duration: 5, ease: "linear", repeat: Infinity }}
-                className="block text-transparent bg-clip-text bg-[length:200%_auto]"
-                style={{
-                  backgroundImage: "linear-gradient(to right, var(--phantom-glow), var(--phantom-accent), var(--phantom-glow))",
-                }}
-              >
-                Trust no one.
-              </motion.span>
-            </motion.h1>
+            <h1 className="text-5xl sm:text-6xl md:text-7xl font-extrabold tracking-tight mb-4 leading-[1.08]">
+              <span className="text-white">Share anything.</span>
+              <br />
+              <span className="text-indigo-400">Trust no one.</span>
+            </h1>
 
-            <motion.p
-              variants={itemVariants}
-              className="text-lg md:text-xl max-w-2xl mx-auto mb-10"
-              style={{ color: "var(--phantom-muted)" }}
-            >
-              Anonymous, end-to-end encrypted, ephemeral data sharing. No accounts. No traces. No compromises.
-            </motion.p>
+            <p className="text-base sm:text-lg md:text-xl max-w-xl mx-auto mb-8 text-[var(--wisp-muted)] leading-relaxed font-normal">
+              Anonymous, end-to-end encrypted, ephemeral data sharing. No accounts.
+              <br className="hidden sm:inline" /> No traces. No compromises.
+            </p>
 
-            <motion.div variants={itemVariants} className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-16">
+            {/* Clean Minimal CTAs: Drop a File, Share Text, Live Chat */}
+            <div className="flex flex-row flex-wrap items-center justify-center gap-3 w-full max-w-md sm:max-w-lg mb-8">
               <Link
                 href="/drop"
-                className="w-full sm:w-auto px-8 py-3 rounded-lg font-medium transition-all duration-200 shadow-lg hover:shadow-xl hover:-translate-y-0.5 text-white flex items-center justify-center"
-                style={{ backgroundColor: "var(--phantom-glow)" }}
+                className="flex-1 min-w-[110px] px-5 py-3 rounded-xl font-semibold transition-all shadow-[0_0_20px_rgba(99,102,241,0.35)] hover:shadow-[0_0_30px_rgba(99,102,241,0.5)] hover:-translate-y-0.5 text-white bg-indigo-600 hover:bg-indigo-500 border border-indigo-400/30 text-sm flex items-center justify-center cursor-pointer text-center"
               >
                 Drop a File
               </Link>
               <Link
                 href="/text"
-                className="w-full sm:w-auto px-8 py-3 rounded-lg font-medium transition-all duration-200 border bg-transparent hover:bg-white/5 flex items-center justify-center"
-                style={{ borderColor: "var(--phantom-border)", color: "var(--phantom-accent)" }}
+                className="flex-1 min-w-[110px] px-5 py-3 rounded-xl font-semibold transition-all border border-[var(--wisp-border)] bg-[var(--wisp-surface-glass)] hover:bg-[var(--wisp-elevated)] hover:-translate-y-0.5 text-[var(--wisp-text)] text-sm flex items-center justify-center backdrop-blur-md cursor-pointer text-center"
               >
                 Share Text
               </Link>
-            </motion.div>
+              <Link
+                href="/chat"
+                className="flex-1 min-w-[110px] px-5 py-3 rounded-xl font-semibold transition-all border border-[var(--wisp-border)] bg-[var(--wisp-surface-glass)] hover:bg-[var(--wisp-elevated)] hover:-translate-y-0.5 text-[var(--wisp-text)] text-sm flex items-center justify-center backdrop-blur-md cursor-pointer text-center"
+              >
+                Live Chat
+              </Link>
+            </div>
 
-            <motion.div variants={itemVariants}>
-              <SpotlightCard className="max-w-md mx-auto p-8 rounded-xl border border-[var(--phantom-border)]">
-                <label htmlFor="heroCode" className="block text-sm font-medium mb-4 text-left text-[var(--phantom-muted)]">
-                  Have a code?
-                </label>
-              <form onSubmit={handleHeroSubmit} className="flex gap-2">
-                <input
-                  id="heroCode"
-                  type="text"
-                  maxLength={8}
-                  placeholder="XXXXXXXX"
-                  value={heroCode}
-                  onChange={(e) => setHeroCode(e.target.value.toUpperCase())}
-                  className="w-full px-4 py-2 rounded-lg font-mono text-center tracking-widest text-lg uppercase outline-none transition-colors border focus:border-indigo-500 bg-transparent"
-                  style={{
-                    borderColor: "var(--phantom-border)",
-                    color: "var(--phantom-text)",
-                  }}
-                  autoComplete="off"
-                  spellCheck="false"
-                />
-                <button
-                  type="submit"
-                  disabled={heroCode.length !== 6 && heroCode.length !== 8 || isRouting}
-                  className="px-6 py-2 rounded-lg font-semibold transition-colors disabled:opacity-50 text-white flex items-center justify-center min-w-[64px]"
-                  style={{ backgroundColor: "var(--phantom-glow)" }}
-                >
-                  {isRouting ? <RefreshCw className="w-5 h-5 animate-spin" /> : "Go"}
-                </button>
+            {/* Minimal Access Code Card */}
+            <SpotlightCard className="w-full max-w-md p-4 sm:p-5 rounded-2xl shadow-2xl border border-[var(--wisp-border)] bg-[var(--wisp-surface)]/70 backdrop-blur-md">
+              <form onSubmit={handleSubmit} className="flex flex-col gap-2.5">
+                <div className="flex items-center justify-between text-xs text-[var(--wisp-muted)] px-1">
+                  <span>Have a code?</span>
+                  <span className="font-mono text-[10px]">Case-insensitive</span>
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    id="heroCode"
+                    type="text"
+                    maxLength={8}
+                    placeholder="XXXXXXXX"
+                    value={accessCode}
+                    onChange={(e) => {
+                      setAccessCode(e.target.value.replace(/[^a-zA-Z0-9]/g, ''));
+                      if (errorMessage) setErrorMessage("");
+                    }}
+                    onBlur={() => {
+                      setAccessCode((prev) => prev.toUpperCase());
+                    }}
+                    autoCapitalize="characters"
+                    autoCorrect="off"
+                    autoComplete="off"
+                    spellCheck="false"
+                    className="w-full px-4 py-2.5 rounded-xl font-mono text-center tracking-[0.25em] text-lg uppercase outline-none transition-colors border border-[var(--wisp-border)] focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400/40 bg-[var(--wisp-surface-glass)] text-[var(--wisp-text)] placeholder:text-[var(--wisp-muted)]/40"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      openQRScanner((scanned) => {
+                        const clean = scanned.trim();
+                        if (clean.startsWith("http://") || clean.startsWith("https://")) {
+                          try {
+                            const u = new URL(clean);
+                            if (u.pathname.startsWith('/d/') || u.pathname.startsWith('/t/') || u.pathname.startsWith('/chat')) {
+                              window.location.href = `${window.location.origin}${u.pathname}${u.search}${u.hash}`;
+                              return;
+                            }
+                          } catch {}
+                        }
+                        const codeOnly = clean.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+                        if (codeOnly) {
+                          setAccessCode(codeOnly);
+                          handleRouting(codeOnly);
+                        }
+                      });
+                    }}
+                    className="p-2.5 rounded-xl border border-[var(--wisp-border)] bg-[var(--wisp-surface-glass)] text-[var(--wisp-muted)] hover:text-indigo-400 hover:border-indigo-400/50 hover:bg-[var(--wisp-elevated)] transition-all cursor-pointer flex items-center justify-center shrink-0"
+                    aria-label="Scan QR Code"
+                    title="Scan QR Code"
+                  >
+                    <QrCode className="w-5 h-5" />
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={(accessCode.length !== 6 && accessCode.length !== 8) || isRouting}
+                    className="px-5 py-2.5 rounded-xl font-semibold transition-all disabled:opacity-40 text-white bg-indigo-600 hover:bg-indigo-500 shadow-[0_0_20px_rgba(99,102,241,0.4)] border border-indigo-400/30 flex items-center justify-center shrink-0 min-w-[70px] cursor-pointer"
+                  >
+                    {isRouting ? <RefreshCw className="w-4 h-4 animate-spin" /> : "Go"}
+                  </button>
+                </div>
+                {errorMessage && (
+                  <p className="text-xs text-rose-400 text-left px-1">{errorMessage}</p>
+                )}
               </form>
-              </SpotlightCard>
-            </motion.div>
+            </SpotlightCard>
           </motion.div>
         </section>
 
-        {/* 2. How It Works Section */}
-        <section className="py-24 px-6 border-t" style={{ borderColor: "var(--phantom-border)" }}>
-          <div className="max-w-6xl mx-auto">
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, margin: "-100px" }}
-              transition={{ duration: 0.5 }}
-              className="text-center mb-16"
-            >
-              <h2 className="text-3xl font-bold">How it works</h2>
-            </motion.div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-              {/* Step 1 */}
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true, margin: "-100px" }}
-                transition={{ duration: 0.5, delay: 0.1 }}
-              >
-                <SpotlightCard className="h-full p-8 rounded-xl border border-[var(--phantom-border)] transition-all duration-300 hover:-translate-y-1">
-                  <div className="w-12 h-12 rounded-lg flex items-center justify-center mb-6 bg-[var(--phantom-elevated)]">
-                    <svg className="w-6 h-6 text-[var(--phantom-glow)]" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                    </svg>
-                  </div>
-                  <h3 className="text-xl font-bold mb-3">Encrypt</h3>
-                  <p className="text-[var(--phantom-muted)]">
-                    Your file is encrypted in your browser with AES-256 before anything touches the network.
-                  </p>
-                </SpotlightCard>
-              </motion.div>
-
-              {/* Step 2 */}
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true, margin: "-100px" }}
-                transition={{ duration: 0.5, delay: 0.2 }}
-              >
-                <SpotlightCard className="h-full p-8 rounded-xl border border-[var(--phantom-border)] transition-all duration-300 hover:-translate-y-1">
-                  <div className="w-12 h-12 rounded-lg flex items-center justify-center mb-6 bg-[var(--phantom-elevated)]">
-                    <svg className="w-6 h-6 text-[var(--phantom-accent)]" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-                    </svg>
-                  </div>
-                  <h3 className="text-xl font-bold mb-3">Share</h3>
-                  <p className="text-[var(--phantom-muted)]">
-                    Get an 8-digit code or link. Share it however you want — text, voice, carrier pigeon.
-                  </p>
-                </SpotlightCard>
-              </motion.div>
-
-              {/* Step 3 */}
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true, margin: "-100px" }}
-                transition={{ duration: 0.5, delay: 0.3 }}
-              >
-                <SpotlightCard className="h-full p-8 rounded-xl border border-[var(--phantom-border)] transition-all duration-300 hover:-translate-y-1">
-                  <div className="w-12 h-12 rounded-lg flex items-center justify-center mb-6 bg-[var(--phantom-elevated)]">
-                    <svg className="w-6 h-6 text-[var(--phantom-danger)]" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.879 16.121A3 3 0 1012.015 11L11 14H9c0 .768.293 1.536.879 2.121z" />
-                    </svg>
-                  </div>
-                  <h3 className="text-xl font-bold mb-3">Vanish</h3>
-                  <p className="text-[var(--phantom-muted)]">
-                    Your file auto-destructs after access or when the timer runs out. No traces left behind.
-                  </p>
-                </SpotlightCard>
-              </motion.div>
+        {/* 2. How It Works Section (Below the fold) */}
+        <section className="py-16 md:py-20 px-4 md:px-8 border-t border-[var(--wisp-border)] bg-[var(--wisp-surface)]/30">
+          <div className="max-w-5xl mx-auto">
+            <div className="text-center mb-10">
+              <h2 className="text-3xl sm:text-4xl md:text-5xl font-extrabold tracking-tight text-white mb-2">How it works</h2>
+              <p className="text-sm sm:text-base text-[var(--wisp-muted)]">Ephemeral privacy in three frictionless steps</p>
             </div>
-          </div>
-        </section>
 
-        {/* 3. Features Grid */}
-        <section className="py-24 px-6">
-          <div className="max-w-6xl mx-auto">
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, margin: "-100px" }}
-              transition={{ duration: 0.5 }}
-              className="text-center mb-16"
-            >
-              <h2 className="text-3xl font-bold">Built for paranoia</h2>
-            </motion.div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
               {[
                 {
-                  title: "E2E Encrypted",
-                  desc: "AES-GCM-256. Keys never leave your device. The server only stores encrypted noise.",
-                  icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                  step: "01",
+                  title: "Encrypt",
+                  desc: "Your payload is encrypted in memory using AES-256-GCM before any bytes leave your browser.",
+                  icon: ShieldCheck,
                 },
                 {
-                  title: "Zero Knowledge",
-                  desc: "We can't read your files even if we wanted to. The decryption key is in the URL fragment — never sent to our servers.",
-                  icon: <><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></>
+                  step: "02",
+                  title: "Share",
+                  desc: "Receive an 8-character access code or secure link. Keys are contained only in the client URL fragment.",
+                  icon: Ghost,
                 },
                 {
-                  title: "Burn After Reading",
-                  desc: "One view, then it's gone forever. Perfect for sensitive documents you only need to share once.",
-                  icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  step: "03",
+                  title: "Vanish",
+                  desc: "The file is purged permanently from memory and storage upon first access or when the timer expires.",
+                  icon: Flame,
                 },
-                {
-                  title: "Stealth Mode",
-                  desc: "Click the shield icon in the nav bar to activate. Panic button (Ctrl+Shift+X), inactivity wipe, anti-caching — leave nothing behind.",
-                  icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
-                },
-                {
-                  title: "Smart Viewers",
-                  desc: "PDFs, code, images, videos — each file type gets its own specialized viewer. No downloads required.",
-                  icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
-                },
-                {
-                  title: "Metadata Stripped",
-                  desc: "EXIF data, GPS coordinates, author info — automatically scrubbed before encryption.",
-                  icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-                }
-              ].map((feature, i) => (
-                <motion.div
-                  key={i}
-                  initial={{ opacity: 0, y: 20 }}
-                  whileInView={{ opacity: 1, y: 0 }}
-                  viewport={{ once: true, margin: "-50px" }}
-                  transition={{ duration: 0.4, delay: i * 0.1 }}
-                >
-                  <SpotlightCard className="h-full p-6 rounded-xl border border-[var(--phantom-border)] transition-colors duration-300 hover:border-[var(--phantom-glow)] group">
-                    <svg className="w-8 h-8 mb-4 transition-colors duration-300 text-[var(--phantom-muted)] group-hover:text-[var(--phantom-glow)]" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                      {feature.icon}
-                    </svg>
-                    <h3 className="text-lg font-bold mb-2">{feature.title}</h3>
-                    <p className="text-sm text-[var(--phantom-muted)]">
-                      {feature.desc}
-                    </p>
-                  </SpotlightCard>
-                </motion.div>
+              ].map((item, i) => (
+                <SpotlightCard key={i} className="p-6 rounded-2xl border border-[var(--wisp-border)] bg-[var(--wisp-surface)]">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="w-10 h-10 rounded-xl bg-[var(--wisp-elevated)] flex items-center justify-center text-[var(--wisp-glow)]">
+                      <item.icon className="w-5 h-5" />
+                    </div>
+                    <span className="font-mono text-xs text-[var(--wisp-muted)] font-semibold">{item.step}</span>
+                  </div>
+                  <h3 className="text-lg font-bold mb-1.5">{item.title}</h3>
+                  <p className="text-xs md:text-sm text-[var(--wisp-muted)] leading-relaxed">{item.desc}</p>
+                </SpotlightCard>
               ))}
             </div>
           </div>
         </section>
 
-        {/* 4. Access Code Section (bottom CTA) */}
-        <section className="py-32 px-6 border-t" style={{ borderColor: "var(--phantom-border)" }}>
-          <div className="max-w-2xl mx-auto text-center">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              whileInView={{ opacity: 1, scale: 1 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.5 }}
-            >
-              <h2 className="text-4xl font-bold mb-4">Ready to receive?</h2>
-              <p className="text-lg mb-10" style={{ color: "var(--phantom-muted)" }}>
-                Enter an 8-digit access code to retrieve your file
-              </p>
-              
-              <form onSubmit={handleBottomSubmit} className="flex flex-col sm:flex-row items-center justify-center gap-4">
-                <input
-                  type="text"
-                  maxLength={8}
-                  placeholder="XXXXXXXX"
-                  value={bottomCode}
-                  onChange={(e) => setBottomCode(e.target.value.toUpperCase())}
-                  className="w-full sm:w-64 px-6 py-4 rounded-xl font-mono text-center tracking-[0.3em] text-2xl uppercase outline-none transition-colors border focus:border-[var(--phantom-glow)]"
-                  style={{
-                    backgroundColor: "var(--phantom-surface)",
-                    borderColor: "var(--phantom-border)",
-                    color: "var(--phantom-text)",
-                  }}
-                  autoComplete="off"
-                  spellCheck="false"
-                />
-                <button
-                  type="submit"
-                  disabled={bottomCode.length !== 6 && bottomCode.length !== 8 || isRouting}
-                  className="w-full sm:w-auto px-8 py-4 rounded-xl font-bold text-lg transition-all disabled:opacity-50 text-white shadow-lg hover:shadow-xl hover:-translate-y-0.5 disabled:hover:translate-y-0 disabled:hover:shadow-none flex items-center justify-center min-w-[120px]"
-                  style={{ backgroundColor: "var(--phantom-glow)" }}
-                >
-                  {isRouting ? <RefreshCw className="w-6 h-6 animate-spin" /> : "Retrieve"}
-                </button>
-              </form>
-            </motion.div>
+        {/* 3. Features Grid (Below the fold) */}
+        <section className="py-16 md:py-20 px-4 md:px-8 border-t border-[var(--wisp-border)]">
+          <div className="max-w-5xl mx-auto">
+            <div className="text-center mb-10">
+              <h2 className="text-3xl sm:text-4xl md:text-5xl font-extrabold tracking-tight text-white mb-2">Built for paranoia</h2>
+              <p className="text-sm sm:text-base text-[var(--wisp-muted)]">Engineered with uncompromising zero-knowledge architecture</p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {[
+                {
+                  title: "E2E Encrypted",
+                  desc: "AES-GCM-256 with PBKDF2 key derivation. The server only ever holds opaque encrypted blobs.",
+                  icon: ShieldCheck,
+                },
+                {
+                  title: "Zero Knowledge",
+                  desc: "Decryption keys remain solely in the URL fragment (#) and are never transmitted over HTTP.",
+                  icon: EyeOff,
+                },
+                {
+                  title: "Burn After Reading",
+                  desc: "One verified view and the server immediately purges ciphertext and storage pointers.",
+                  icon: Flame,
+                },
+                {
+                  title: "Stealth Mode",
+                  desc: "Panic wipe redirects immediately. Automatic inactivity wipe clears in-memory buffers.",
+                  icon: Ghost,
+                },
+                {
+                  title: "Smart Viewers",
+                  desc: "In-memory decoders for images, video, audio, PDF, Word, Excel, CSV, and code. No disk caching.",
+                  icon: Layers,
+                },
+                {
+                  title: "Metadata Stripped",
+                  desc: "EXIF data, GPS coordinates, camera models, and author timestamps scrubbed prior to encryption.",
+                  icon: FileCheck,
+                },
+              ].map((f, i) => (
+                <SpotlightCard key={i} className="p-5 rounded-xl border border-[var(--wisp-border)] bg-[var(--wisp-surface)]">
+                  <f.icon className="w-5 h-5 text-[var(--wisp-glow)] mb-3" />
+                  <h3 className="text-base font-semibold mb-1">{f.title}</h3>
+                  <p className="text-xs text-[var(--wisp-muted)] leading-relaxed">{f.desc}</p>
+                </SpotlightCard>
+              ))}
+            </div>
           </div>
         </section>
       </main>

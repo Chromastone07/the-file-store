@@ -9,7 +9,7 @@ interface VideoPlayerProps {
   onEnded?: () => void;
 }
 
-export default function VideoPlayer({ src, filename, viewOnly = false, onEnded }: VideoPlayerProps) {
+export default function VideoPlayer({ src, viewOnly = false, onEnded }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -17,6 +17,16 @@ export default function VideoPlayer({ src, filename, viewOnly = false, onEnded }
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -44,7 +54,7 @@ export default function VideoPlayer({ src, filename, viewOnly = false, onEnded }
       video.removeEventListener('pause', onPause);
       video.removeEventListener('ended', handleEnded);
     };
-  }, []);
+  }, [onEnded]);
 
   const togglePlay = () => {
     const video = videoRef.current;
@@ -201,31 +211,27 @@ export default function VideoPlayer({ src, filename, viewOnly = false, onEnded }
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="text-xs truncate max-w-[12rem]" style={{ color: 'var(--phantom-muted)' }}>
-              {filename}
-            </span>
-            {!viewOnly && (
-              <a
-                href={src}
-                download={filename}
-                className="px-3 py-1 rounded text-xs font-medium transition-colors"
-                style={{ background: 'var(--phantom-glow)', color: '#fff' }}
-              >
-                Download
-              </a>
-            )}
             <button
               onClick={toggleFullscreen}
               className="p-1 transition-colors hover:opacity-80"
               style={{ color: 'var(--phantom-muted)' }}
-              aria-label="Fullscreen"
+              aria-label={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polyline points="15,3 21,3 21,9" />
-                <polyline points="9,21 3,21 3,15" />
-                <line x1="21" y1="3" x2="14" y2="10" />
-                <line x1="3" y1="21" x2="10" y2="14" />
-              </svg>
+              {isFullscreen ? (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="4,14 10,14 10,20" />
+                  <polyline points="20,10 14,10 14,4" />
+                  <line x1="14" y1="10" x2="21" y2="3" />
+                  <line x1="3" y1="21" x2="10" y2="14" />
+                </svg>
+              ) : (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="15,3 21,3 21,9" />
+                  <polyline points="9,21 3,21 3,15" />
+                  <line x1="21" y1="3" x2="14" y2="10" />
+                  <line x1="3" y1="21" x2="10" y2="14" />
+                </svg>
+              )}
             </button>
           </div>
         </div>
@@ -236,7 +242,7 @@ export default function VideoPlayer({ src, filename, viewOnly = false, onEnded }
           className="text-center py-2 text-xs font-medium"
           style={{ background: 'var(--phantom-danger)', color: '#fff' }}
         >
-          🔥 View Only — Downloads disabled. This file will be destroyed after this session.
+          🔥 View Only - Downloads disabled. This file will be destroyed after this session.
         </div>
       )}
     </div>

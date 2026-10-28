@@ -1,0 +1,59 @@
+import type { MetadataRoute } from 'next';
+
+export default function manifest(): MetadataRoute.Manifest {
+  return {
+    name: 'Phantom',
+    short_name: 'Phantom',
+    description: 'Anonymous, end-to-end encrypted, ephemeral data sharing and messaging.',
+    start_url: '/',
+    id: '/',
+    scope: '/',
+    display: 'standalone',
+    background_color: '#07070f',
+    theme_color: '#07070f',
+    orientation: 'portrait',
+    icons: [
+      {
+        src: '/icons/icon-192.png',
+        sizes: '192x192',
+        type: 'image/png',
+        purpose: 'any',
+      },
+      {
+        src: '/icons/icon-512.png',
+        sizes: '512x512',
+        type: 'image/png',
+        purpose: 'any',
+      },
+      {
+        src: '/icons/icon-maskable-512.png',
+        sizes: '512x512',
+        type: 'image/png',
+        purpose: 'maskable',
+      },
+    ],
+    shortcuts: [
+      {
+        name: 'Drop a File',
+        short_name: 'Drop',
+        description: 'Send end-to-end encrypted files',
+        url: '/drop',
+        icons: [{ src: '/icons/icon-192.png', sizes: '192x192' }],
+      },
+      {
+        name: 'Share Secure Text',
+        short_name: 'Text',
+        description: 'Send self-destructing text notes',
+        url: '/text',
+        icons: [{ src: '/icons/icon-192.png', sizes: '192x192' }],
+      },
+      {
+        name: 'Secure Chat Room',
+        short_name: 'Chat',
+        description: 'Ephemeral zero-trace room',
+        url: '/chat',
+        icons: [{ src: '/icons/icon-192.png', sizes: '192x192' }],
+      },
+    ],
+  };
+}

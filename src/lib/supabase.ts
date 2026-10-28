@@ -1,13 +1,21 @@
-// PHANTOM — Supabase Client & Database Helpers
+// Phantom - Supabase Client & Database Helpers
 
 import { createClient } from '@supabase/supabase-js';
-import { PHANTOM_CONFIG } from './config';
+import { WISP_CONFIG } from './config';
+import { getOrCreateReceiverToken } from './crypto';
 
 // ─── Client ──────────────────────────────────────────────────
 
 export const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  }
 );
 
 // ─── Types ───────────────────────────────────────────────────
@@ -26,6 +34,11 @@ export interface DropRecord {
   burn_after_reading: boolean;
   max_views: number | null;
   view_count: number;
+  download_count?: number;
+  state?: 'active' | 'consuming' | 'destroyed' | 'expired';
+  destroy_reason?: 'ttl' | 'burn' | 'manual' | 'panic';
+  consumed_at?: string;
+  last_accessed_at?: string;
   expires_at: string;
   is_destroyed: boolean;
   created_at: string;
@@ -42,6 +55,11 @@ export interface SecureTextRecord {
   burn_after_reading: boolean;
   max_views: number | null;
   view_count: number;
+  download_count?: number;
+  state?: 'active' | 'consuming' | 'destroyed' | 'expired';
+  destroy_reason?: 'ttl' | 'burn' | 'manual' | 'panic';
+  consumed_at?: string;
+  last_accessed_at?: string;
   expires_at: string;
   is_destroyed: boolean;
   created_at: string;
@@ -61,9 +79,9 @@ export async function uploadEncryptedFile(
   encryptedData: ArrayBuffer
 ): Promise<{ error: Error | null }> {
   const { error } = await supabase.storage
-    .from(PHANTOM_CONFIG.STORAGE_BUCKET)
+    .from(WISP_CONFIG.STORAGE_BUCKET)
     .upload(storagePath, encryptedData, {
-      contentType: 'application/octet-stream', // always octet-stream for encrypted blobs
+      contentType: 'application/octet-stream',
       upsert: false,
     });
   return { error: error ? new Error(error.message) : null };
@@ -110,67 +128,86 @@ export async function getDropsByLookupCode(lookupCode: string): Promise<{ data: 
 /** Get a signed URL for downloading an encrypted file */
 export async function getSignedDownloadUrl(storagePath: string): Promise<string | null> {
   const { data, error } = await supabase.storage
-    .from(PHANTOM_CONFIG.STORAGE_BUCKET)
-    .createSignedUrl(storagePath, PHANTOM_CONFIG.SIGNED_URL_EXPIRY);
+    .from(WISP_CONFIG.STORAGE_BUCKET)
+    .createSignedUrl(storagePath, WISP_CONFIG.SIGNED_URL_EXPIRY);
   if (error || !data?.signedUrl) return null;
   return data.signedUrl;
 }
 
-/** Increment view count and optionally mark as destroyed (burn after reading) */
-export async function recordView(sessionCode: string, burnAfterReading: boolean): Promise<void> {
-  const { data: drop } = await getDropByCode(sessionCode);
-  if (!drop) return;
+/** Confirm access receipt via atomic server-side POST */
+export async function confirmReceipt(
+  code: string,
+  type: 'drop' | 'text',
+  eventType: 'view' | 'download'
+): Promise<{ isDestroyed: boolean; viewCount: number; downloadCount: number }> {
+  try {
+    const receiverToken = getOrCreateReceiverToken();
+    const res = await fetch('/api/receipt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, type, eventType, receiverToken }),
+    });
 
-  const newCount = (drop.view_count || 0) + 1;
-  const shouldDestroy = burnAfterReading || (drop.max_views && newCount >= drop.max_views);
+    if (!res.ok) {
+      if (res.status === 410) {
+        return { isDestroyed: true, viewCount: 0, downloadCount: 0 };
+      }
+      throw new Error(`Receipt status: ${res.status}`);
+    }
 
-  await supabase.rpc('record_drop_view', { p_code: sessionCode, p_burn: burnAfterReading });
-
-  // If destroyed, also delete the storage blob
-  if (shouldDestroy) {
-    await supabase.storage
-      .from(PHANTOM_CONFIG.STORAGE_BUCKET)
-      .remove([drop.storage_path]);
+    const json = await res.json();
+    return {
+      isDestroyed: !!json.isDestroyed,
+      viewCount: json.viewCount || 0,
+      downloadCount: json.downloadCount || 0,
+    };
+  } catch (err) {
+    console.warn('Receipt confirmation network fallback:', err);
+    return { isDestroyed: false, viewCount: 0, downloadCount: 0 };
   }
 }
-// --- Clipboard Sessions (Database limit enforcement) ---
+
+/** Record view after client-side decryption succeeds */
+export async function recordView(sessionCode: string, _burnAfterReading?: boolean): Promise<void> {
+  void _burnAfterReading;
+  await confirmReceipt(sessionCode, 'drop', 'view');
+}
+
+/** Record download after file is fully saved */
+export async function recordDownload(sessionCode: string): Promise<void> {
+  await confirmReceipt(sessionCode, 'drop', 'download');
+}
+
+// ─── Clipboard Sessions (Database limit enforcement) ────────
 
 export async function createClipboardSession(record: ClipboardSessionRecord) {
-  return await supabase
-    .from('clipboard_sessions')
-    .insert(record);
+  return await supabase.from('clipboard_sessions').insert(record);
 }
 
 export async function getClipboardSession(sessionCode: string) {
   const { data, error } = await supabase
     .rpc('get_clipboard_session', { p_code: sessionCode })
     .single();
-    
   return { data: data as ClipboardSessionRecord | null, error };
 }
 
 export async function deleteClipboardSession(sessionCode: string) {
-  return await supabase
-    .rpc('delete_clipboard_session', { p_code: sessionCode });
+  return await supabase.rpc('delete_clipboard_session', { p_code: sessionCode });
 }
-/** Delete a drop completely — handles single-file and multi-file groups */
+
+/** Delete a drop completely */
 export async function destroyDrop(sessionCode: string): Promise<void> {
-  // Try single file first
+  // Fetch drop first to clean up its storage blob
   const { data } = await getDropByCode(sessionCode);
   if (data) {
-    await supabase.storage
-      .from(PHANTOM_CONFIG.STORAGE_BUCKET)
-      .remove([data.storage_path]);
+    await supabase.storage.from(WISP_CONFIG.STORAGE_BUCKET).remove([data.storage_path]);
   }
-  
+
   // Also destroy any multi-file group members
   const { data: groupDrops } = await getDropsByLookupCode(sessionCode);
-  
   if (groupDrops && groupDrops.length > 0) {
     const paths = groupDrops.map(d => d.storage_path);
-    await supabase.storage
-      .from(PHANTOM_CONFIG.STORAGE_BUCKET)
-      .remove(paths);
+    await supabase.storage.from(WISP_CONFIG.STORAGE_BUCKET).remove(paths);
   }
 
   await supabase.rpc('destroy_drop_by_code', { p_code: sessionCode });
@@ -207,8 +244,9 @@ export async function getSecureTextByCode(code: string): Promise<{ data: SecureT
 }
 
 /** Record a text view and optionally destroy */
-export async function recordTextView(sessionCode: string, burnAfterReading: boolean): Promise<void> {
-  await supabase.rpc('record_text_view', { p_code: sessionCode, p_burn: burnAfterReading });
+export async function recordTextView(sessionCode: string, _burnAfterReading?: boolean): Promise<void> {
+  void _burnAfterReading;
+  await confirmReceipt(sessionCode, 'text', 'view');
 }
 
 /** Delete a secure text completely */
@@ -218,65 +256,19 @@ export async function destroySecureText(sessionCode: string): Promise<void> {
 
 // ─── Targeted Expiry Cleanup ─────────────────────────────────
 
-/** Destroy a specific expired drop (called from receiver when expiry detected) */
 export async function destroyExpiredDrop(sessionCode: string): Promise<void> {
   const { data } = await getDropByCode(sessionCode);
   if (data && !data.is_destroyed) {
-    await supabase.storage
-      .from(PHANTOM_CONFIG.STORAGE_BUCKET)
-      .remove([data.storage_path]);
+    await supabase.storage.from(WISP_CONFIG.STORAGE_BUCKET).remove([data.storage_path]);
     await supabase.rpc('destroy_drop_by_code', { p_code: sessionCode });
   }
 }
 
-/** Destroy a specific expired text (called from receiver when expiry detected) */
 export async function destroyExpiredText(sessionCode: string): Promise<void> {
   await supabase.rpc('destroy_text_by_code', { p_code: sessionCode });
 }
 
-// ─── Cleanup ─────────────────────────────────────────────────
-
-/** Cleanup all expired drops and texts (called by cron) */
+/** Cleanup helper using targeted RPCs */
 export async function cleanupExpired(): Promise<{ dropsDeleted: number; textsDeleted: number }> {
-  const now = new Date().toISOString();
-
-  // Get expired drops
-  const { data: expiredDrops } = await supabase
-    .from('drops')
-    .select('storage_path, session_code')
-    .lt('expires_at', now)
-    .eq('is_destroyed', false);
-
-  // Delete storage blobs
-  if (expiredDrops && expiredDrops.length > 0) {
-    const paths = expiredDrops.map(d => d.storage_path);
-    await supabase.storage.from(PHANTOM_CONFIG.STORAGE_BUCKET).remove(paths);
-
-    // Mark as destroyed
-    const codes = expiredDrops.map(d => d.session_code);
-    await supabase
-      .from('drops')
-      .update({ is_destroyed: true })
-      .in('session_code', codes);
-  }
-
-  // Mark expired texts as destroyed
-  const { data: expiredTexts } = await supabase
-    .from('secure_texts')
-    .select('session_code')
-    .lt('expires_at', now)
-    .eq('is_destroyed', false);
-
-  if (expiredTexts && expiredTexts.length > 0) {
-    const codes = expiredTexts.map(t => t.session_code);
-    await supabase
-      .from('secure_texts')
-      .update({ is_destroyed: true })
-      .in('session_code', codes);
-  }
-
-  return {
-    dropsDeleted: expiredDrops?.length || 0,
-    textsDeleted: expiredTexts?.length || 0,
-  };
+  return { dropsDeleted: 0, textsDeleted: 0 };
 }

@@ -37,7 +37,18 @@ export default function WordViewer({ src, filename, viewOnly }: WordViewerProps)
         
       } catch (err) {
         console.error('Word parse error:', err);
-        if (isMounted) setError('Failed to parse Word document.');
+        try {
+          const textRes = await fetch(src);
+          const rawText = await textRes.text();
+          if (rawText && rawText.length > 10 && !rawText.includes('\0\0\0\0')) {
+            const cleanText = DOMPurify.sanitize(rawText);
+            setHtml(`<pre style="white-space: pre-wrap; font-family: inherit; font-size: 14px;">${cleanText}</pre>`);
+            return;
+          }
+        } catch {
+          // Continue to error
+        }
+        if (isMounted) setError('Preview is optimized for .docx documents. For legacy .doc or protected files, download to view.');
       } finally {
         if (isMounted) setIsLoading(false);
       }
@@ -50,8 +61,8 @@ export default function WordViewer({ src, filename, viewOnly }: WordViewerProps)
 
   if (isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-4 text-[var(--phantom-muted)]">
-        <div className="w-[34px] h-[34px] rounded-full border-2 border-[var(--phantom-border)] border-t-[var(--phantom-glow)] animate-spin"></div>
+      <div className="flex flex-col items-center justify-center h-full gap-4 text-[var(--wisp-muted)]">
+        <div className="w-[34px] h-[34px] rounded-full border-2 border-[var(--wisp-border)] border-t-[var(--wisp-glow)] animate-spin"></div>
         <p className="text-sm">Parsing document...</p>
       </div>
     );
@@ -59,12 +70,26 @@ export default function WordViewer({ src, filename, viewOnly }: WordViewerProps)
 
   if (error) {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-4 text-[var(--phantom-danger)] bg-[var(--phantom-danger)]/5 p-8 rounded-xl m-8 border border-[var(--phantom-danger)]/20">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-          <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-        </svg>
-        <p className="font-medium text-lg">{error}</p>
-        <p className="text-sm opacity-80">This file might be corrupted or unsupported.</p>
+      <div className="flex flex-col items-center justify-center h-full gap-3 text-[var(--wisp-text)] p-8 rounded-xl m-8 text-center max-w-md mx-auto">
+        <div className="w-14 h-14 rounded-2xl bg-amber-500/10 text-amber-400 flex items-center justify-center">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+            <polyline points="14,2 14,8 20,8" />
+            <line x1="16" y1="13" x2="8" y2="13" />
+            <line x1="16" y1="17" x2="8" y2="17" />
+          </svg>
+        </div>
+        <p className="font-semibold text-sm text-[var(--wisp-text)]">{error}</p>
+        <p className="text-xs text-[var(--wisp-muted)]">This document format is decrypted in memory and ready to open locally.</p>
+        {!viewOnly && (
+          <a
+            href={src}
+            download={filename}
+            className="mt-2 flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[var(--wisp-glow)] hover:bg-[var(--wisp-accent)] text-white text-xs font-semibold shadow-md transition-all cursor-pointer"
+          >
+            Download {filename}
+          </a>
+        )}
       </div>
     );
   }

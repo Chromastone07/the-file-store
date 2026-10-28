@@ -1,0 +1,49 @@
+
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0e101d"/>
+      <stop offset="100%" stop-color="#05060a"/>
+    </linearGradient>
+    <linearGradient id="shieldGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#818cf8"/>
+      <stop offset="50%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#4338ca"/>
+    </linearGradient>
+    <linearGradient id="accentGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#a855f7"/>
+    </linearGradient>
+    <filter id="glow1" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="16" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- App Icon Squircle -->
+  <rect width="512" height="512" rx="115" fill="url(#bg1)"/>
+  <rect width="508" height="508" x="2" y="2" rx="113" fill="none" stroke="#6366f1" stroke-width="2" opacity="0.25"/>
+
+  <!-- Orbital Rings -->
+  <circle cx="256" cy="256" r="180" fill="none" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="12 16" opacity="0.3"/>
+  <circle cx="256" cy="256" r="140" fill="none" stroke="#38bdf8" stroke-width="1" opacity="0.2"/>
+
+  <!-- Cyber Shield Facets -->
+  <g filter="url(#glow1)">
+    <!-- Outer Shield Stroke -->
+    <path d="M 256 80 L 396 140 C 396 280 340 376 256 432 C 172 376 116 280 116 140 Z"
+          fill="#131525" stroke="url(#shieldGrad1)" stroke-width="12" stroke-linejoin="round"/>
+
+    <!-- Inner Core Plate -->
+    <path d="M 256 125 L 360 170 C 360 270 318 348 256 392 C 194 348 152 270 152 170 Z"
+          fill="url(#bg1)" stroke="url(#accentGrad1)" stroke-width="4" opacity="0.9"/>
+
+    <!-- Quantum Pulse Core -->
+    <polygon points="256,180 300,256 256,332 212,256" fill="url(#shieldGrad1)" opacity="0.85"/>
+    <circle cx="256" cy="256" r="22" fill="#ffffff" filter="url(#glow1)"/>
+    <circle cx="256" cy="256" r="10" fill="#38bdf8"/>
+  </g>
+</svg>

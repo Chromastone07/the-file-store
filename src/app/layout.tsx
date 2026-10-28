@@ -1,15 +1,58 @@
+import type { Viewport, Metadata } from 'next';
+import { Outfit, Space_Grotesk, JetBrains_Mono } from 'next/font/google';
 import { Toaster } from 'sonner';
 import { GlobalSessionProvider } from '@/context/GlobalSessionContext';
 import SessionDock from '@/components/ui/SessionDock';
+import MobileTabBar from '@/components/layout/MobileTabBar';
+import PWAInstaller from '@/components/pwa/PWAInstaller';
+import AppSplashScreen from '@/components/pwa/AppSplashScreen';
 import './globals.css';
 
-export const metadata = {
-  title: 'PHANTOM — Share. Access. Vanish.',
+const outfit = Outfit({
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-outfit',
+  weight: ['300', '400', '500', '600', '700', '800'],
+});
+
+const spaceGrotesk = Space_Grotesk({
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-space',
+  weight: ['400', '500', '600', '700'],
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-mono',
+});
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  viewportFit: 'cover',
+  themeColor: '#07070f',
+};
+
+export const metadata: Metadata = {
+  title: 'Phantom - Share. Access. Vanish.',
   description: 'Anonymous, end-to-end encrypted, ephemeral data sharing. No accounts. No traces. No compromises.',
-  keywords: ['encrypted file sharing', 'anonymous', 'ephemeral', 'secure transfer', 'burn after reading'],
+  keywords: ['encrypted file sharing', 'anonymous', 'ephemeral', 'secure transfer', 'burn after reading', 'pwa'],
   robots: 'index, follow',
+  manifest: '/manifest.webmanifest',
+  icons: {
+    icon: '/icons/favicon-32.png',
+    apple: '/icons/apple-touch-icon.png',
+  },
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: 'Phantom',
+  },
   openGraph: {
-    title: 'PHANTOM',
+    title: 'Phantom',
     description: 'Anonymous encrypted ephemeral data sharing.',
     type: 'website',
   },
@@ -19,25 +62,30 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" suppressHydrationWarning data-scroll-behavior="smooth">
       <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
         <meta name="referrer" content="no-referrer" />
         <meta httpEquiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
         <meta httpEquiv="Pragma" content="no-cache" />
+        <link rel="manifest" href="/manifest.json" />
+        <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <meta name="apple-mobile-web-app-title" content="Phantom" />
       </head>
-      <body className="antialiased bg-[var(--phantom-bg)] text-[var(--phantom-text)] min-h-screen flex flex-col">
+      <body className={`${outfit.variable} ${spaceGrotesk.variable} ${jetbrainsMono.variable} font-sans antialiased bg-[var(--wisp-bg)] text-[var(--wisp-text)] min-h-screen flex flex-col`}>
+        <AppSplashScreen />
         <GlobalSessionProvider>
           {children}
           <SessionDock />
+          <MobileTabBar />
+          <PWAInstaller />
           <Toaster 
-            position="top-center"
-            toastOptions={{
-              className: 'bg-[var(--phantom-elevated)] border-[var(--phantom-border)] text-[var(--phantom-text)]',
-              style: {
-                backdropFilter: 'blur(10px)',
-              }
-            }}
+            position="bottom-center"
+            offset="76px"
+            visibleToasts={1}
+            duration={2200}
+            closeButton={false}
+            theme="dark"
           />
         </GlobalSessionProvider>
       </body>
