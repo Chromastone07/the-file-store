@@ -1,19 +1,22 @@
 "use client";
 
 import React from 'react';
+import dynamic from 'next/dynamic';
 import { getFileCategory } from '@/lib/utils';
 import { recordDownload } from '@/lib/supabase';
 import ImageViewer from './ImageViewer';
 import VideoPlayer from './VideoPlayer';
-import PDFViewer from './PDFViewer';
-import CodeViewer from './CodeViewer';
 import DocumentViewer from './DocumentViewer';
 import AudioViewer from './AudioViewer';
-import WordViewer from './WordViewer';
-import SpreadsheetViewer from './SpreadsheetViewer';
-import ArchiveViewer from './ArchiveViewer';
-import PresentationViewer from './PresentationViewer';
 import FallbackViewer from './FallbackViewer';
+
+// Heavy specialized viewers dynamically loaded on-demand
+const PDFViewer = dynamic(() => import('./PDFViewer'), { ssr: false });
+const WordViewer = dynamic(() => import('./WordViewer'), { ssr: false });
+const SpreadsheetViewer = dynamic(() => import('./SpreadsheetViewer'), { ssr: false });
+const ArchiveViewer = dynamic(() => import('./ArchiveViewer'), { ssr: false });
+const PresentationViewer = dynamic(() => import('./PresentationViewer'), { ssr: false });
+const CodeViewer = dynamic(() => import('./CodeViewer'), { ssr: false });
 import { 
   X, 
   Download, 

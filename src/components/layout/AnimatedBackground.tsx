@@ -66,9 +66,10 @@ export default function AnimatedBackground() {
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (prefersReducedMotion) return;
 
-    // Lighter particle density on mobile to preserve CPU and battery
-    const divisor = isMobile ? 24000 : 12000;
-    const particleCount = Math.floor((width * height) / divisor);
+    // Lighter, optimized particle count to prevent main thread blocking (TBT)
+    const maxParticles = isMobile ? 18 : 36;
+    const divisor = isMobile ? 32000 : 18000;
+    const particleCount = Math.min(maxParticles, Math.max(12, Math.floor((width * height) / divisor)));
     const particles: Particle[] = [];
     for (let i = 0; i < particleCount; i++) {
       particles.push(new Particle(width, height));
@@ -142,11 +143,14 @@ export default function AnimatedBackground() {
     });
 
     let animationFrameId: number;
+    let startTimeoutId: ReturnType<typeof setTimeout>;
 
     const render = () => {
       const particleColor = `rgba(${glowRgb}, 0.6)`;
-      const connectionDist = 120;
-      const mouseConnectionDist = 180;
+      const connectionDist = 110;
+      const connectionDistSq = connectionDist * connectionDist;
+      const mouseConnectionDist = 160;
+      const mouseDistSq = mouseConnectionDist * mouseConnectionDist;
 
       // Clear the canvas
       ctx.clearRect(0, 0, width, height);
@@ -156,14 +160,15 @@ export default function AnimatedBackground() {
         p.update(width, height, mouseX, mouseY);
         p.draw(ctx, particleColor);
 
-        // Connect to other particles
+        // Connect to other particles using fast squared distance checks
         for (let j = i + 1; j < particles.length; j++) {
           const p2 = particles[j];
           const dx = p.x - p2.x;
           const dy = p.y - p2.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
+          const distSq = dx * dx + dy * dy;
 
-          if (dist < connectionDist) {
+          if (distSq < connectionDistSq) {
+            const dist = Math.sqrt(distSq);
             ctx.beginPath();
             ctx.moveTo(p.x, p.y);
             ctx.lineTo(p2.x, p2.y);
@@ -178,9 +183,10 @@ export default function AnimatedBackground() {
         if (mouseX !== -1 && mouseY !== -1) {
           const dx = p.x - mouseX;
           const dy = p.y - mouseY;
-          const dist = Math.sqrt(dx * dx + dy * dy);
+          const distSq = dx * dx + dy * dy;
           
-          if (dist < mouseConnectionDist) {
+          if (distSq < mouseDistSq) {
+            const dist = Math.sqrt(distSq);
             ctx.beginPath();
             ctx.moveTo(p.x, p.y);
             ctx.lineTo(mouseX, mouseY);
@@ -195,9 +201,13 @@ export default function AnimatedBackground() {
       animationFrameId = requestAnimationFrame(render);
     };
 
-    render();
+    // Defer start by 150ms to allow smooth initial React hydration & layout without blocking main thread
+    startTimeoutId = setTimeout(() => {
+      render();
+    }, 150);
 
     return () => {
+      clearTimeout(startTimeoutId);
       themeObserver.disconnect();
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('mousemove', onMouseMove);

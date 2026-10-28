@@ -5,8 +5,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useGlobalSession, ActiveSession, DecryptedFile } from '@/context/GlobalSessionContext';
 import { Shield, X, MessageSquare, FileText, Activity } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import FileViewerModal from '../viewers/FileViewerModal';
-import QRScannerModal from './QRScannerModal';
+import dynamic from 'next/dynamic';
+
+const FileViewerModal = dynamic(() => import('../viewers/FileViewerModal'), { ssr: false });
+const QRScannerModal = dynamic(() => import('./QRScannerModal'), { ssr: false });
 import { recordView, destroyDrop, getDropByCode } from '@/lib/supabase';
 import { toast } from 'sonner';
 
