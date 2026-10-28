@@ -1,5 +1,5 @@
 import type { Viewport, Metadata } from 'next';
-import { Outfit, Space_Grotesk, JetBrains_Mono } from 'next/font/google';
+import { Outfit, JetBrains_Mono } from 'next/font/google';
 import { Toaster } from 'sonner';
 import { GlobalSessionProvider } from '@/context/GlobalSessionContext';
 import SessionDock from '@/components/ui/SessionDock';
@@ -12,14 +12,6 @@ const outfit = Outfit({
   subsets: ['latin'],
   display: 'swap',
   variable: '--font-outfit',
-  weight: ['300', '400', '500', '600', '700', '800'],
-});
-
-const spaceGrotesk = Space_Grotesk({
-  subsets: ['latin'],
-  display: 'swap',
-  variable: '--font-space',
-  weight: ['400', '500', '600', '700'],
 });
 
 const jetbrainsMono = JetBrains_Mono({
@@ -72,7 +64,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <meta name="apple-mobile-web-app-title" content="Phantom" />
       </head>
-      <body className={`${outfit.variable} ${spaceGrotesk.variable} ${jetbrainsMono.variable} font-sans antialiased bg-[var(--wisp-bg)] text-[var(--wisp-text)] min-h-screen flex flex-col`}>
+      <body className={`${outfit.variable} ${jetbrainsMono.variable} font-sans antialiased bg-[var(--wisp-bg)] text-[var(--wisp-text)] min-h-screen flex flex-col`}>
         <AppSplashScreen />
         <GlobalSessionProvider>
           {children}
