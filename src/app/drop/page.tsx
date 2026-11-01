@@ -15,6 +15,7 @@ import CountdownTimer from '@/components/ui/CountdownTimer';
 import SpotlightCard from '@/components/ui/SpotlightCard';
 import LiveViewCount from '@/components/ui/LiveViewCount';
 import CapacityOverloadScreen from '@/components/ui/CapacityOverloadScreen';
+import RecipientLimitSelector from '@/components/ui/RecipientLimitSelector';
 import QRCode from 'qrcode';
 import { 
   UploadCloud, 
@@ -38,6 +39,7 @@ export default function DropPage() {
   const [isDragging, setIsDragging] = useState(false);
   const [expirySeconds, setExpirySeconds] = useState(WISP_CONFIG.DEFAULT_EXPIRY_MINUTES * 60);
   const [burnAfterReading, setBurnAfterReading] = useState(false);
+  const [maxRecipients, setMaxRecipients] = useState<number | null>(null);
   const [addPassword, setAddPassword] = useState(false);
   const [password, setPassword] = useState('');
   const [stripMetadata, setStripMetadata] = useState(true);
@@ -114,7 +116,8 @@ export default function DropPage() {
     try {
       const uploadResult = await uploadFile(files, {
         expirySeconds,
-        burnAfterReading,
+        burnAfterReading: maxRecipients === 1 || burnAfterReading,
+        maxViews: maxRecipients,
         password: addPassword && password ? password : null,
         stripMetadata
       });
@@ -388,6 +391,14 @@ export default function DropPage() {
                           onChange={(sel) => setExpirySeconds(sel.totalSeconds)} 
                         />
 
+                        <RecipientLimitSelector
+                          value={maxRecipients}
+                          onChange={(limit) => {
+                            setMaxRecipients(limit);
+                            setBurnAfterReading(limit === 1);
+                          }}
+                        />
+
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
                           {/* Burn After Reading */}
                           <label className="flex items-center justify-between p-2.5 rounded-xl bg-[var(--wisp-surface-glass)] border border-[var(--wisp-border)] hover:border-[var(--wisp-border-strong)] transition-colors cursor-pointer select-none">
@@ -398,7 +409,11 @@ export default function DropPage() {
                             <input 
                               type="checkbox" 
                               checked={burnAfterReading} 
-                              onChange={(e) => setBurnAfterReading(e.target.checked)} 
+                              onChange={(e) => {
+                                const checked = e.target.checked;
+                                setBurnAfterReading(checked);
+                                setMaxRecipients(checked ? 1 : null);
+                              }} 
                               className="accent-indigo-500 w-4 h-4 cursor-pointer" 
                             />
                           </label>

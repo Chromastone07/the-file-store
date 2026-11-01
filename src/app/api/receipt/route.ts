@@ -78,10 +78,9 @@ export async function POST(request: Request) {
       updatedDownloadCount += 1;
     }
 
-    // 5. Evaluate burn-after-reading or max views
-    const shouldBurn = 
-      item.burn_after_reading || 
-      (item.max_views !== null && updatedViewCount >= item.max_views);
+    // 5. Evaluate burn-after-reading (ONLY single-use burn burns/destroys the record)
+    // Multi-recipient limits cap new admissions without destroying the file for existing viewers!
+    const shouldBurn = item.burn_after_reading === true;
 
     const updatePayload: Record<string, unknown> = {
       view_count: updatedViewCount,

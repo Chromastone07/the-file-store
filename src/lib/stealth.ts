@@ -72,6 +72,26 @@ export class StealthEngine {
     return url;
   }
 
+  public wipeMemory(): void {
+    for (const url of this.blobUrls) {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {
+        // Safe
+      }
+    }
+    this.blobUrls = [];
+
+    for (const buffer of this.buffers) {
+      try {
+        secureWipe(buffer);
+      } catch {
+        new Uint8Array(buffer).fill(0);
+      }
+    }
+    this.buffers = [];
+  }
+
   public wipeAll(): void {
     // Revoke all blob URLs
     for (const url of this.blobUrls) {
@@ -112,6 +132,62 @@ export class StealthEngine {
   }
 
   public panic(): void {
+    if (typeof window !== 'undefined') {
+      try {
+        // Collect active codes before wiping local stores
+        const historyJson = localStorage.getItem(PHANTOM_CONFIG.STORAGE_KEYS.SENDER_HISTORY) || localStorage.getItem('phantom_sender_history');
+        const dockJson = localStorage.getItem(PHANTOM_CONFIG.STORAGE_KEYS.SESSION_DOCK) || localStorage.getItem('phantom_active_dock');
+
+        const dropCodes: string[] = [];
+        const textCodes: string[] = [];
+        const chatCodes: string[] = [];
+
+        if (historyJson) {
+          try {
+            const items = JSON.parse(historyJson);
+            if (Array.isArray(items)) {
+              for (const item of items) {
+                if (!item.isDestroyed) {
+                  if (item.type === 'drop') dropCodes.push(item.dbLookupCode || item.rawCode);
+                  else if (item.type === 'text') textCodes.push(item.dbLookupCode || item.rawCode);
+                  else if (item.type === 'clipboard' || item.type === 'chat') chatCodes.push(item.rawCode);
+                }
+              }
+            }
+          } catch {}
+        }
+
+        if (dockJson) {
+          try {
+            const dockSessions = JSON.parse(dockJson);
+            if (Array.isArray(dockSessions)) {
+              for (const s of dockSessions) {
+                if (s.type === 'drop' || s.type === 'sent_drop') dropCodes.push(s.id);
+                else if (s.type === 'text' || s.type === 'sent_text') textCodes.push(s.id);
+                else if (s.type === 'chat') chatCodes.push(s.id);
+              }
+            }
+          } catch {}
+        }
+
+        // Send beacon/fetch with keepalive so server purges remote blobs & records
+        if (dropCodes.length > 0 || textCodes.length > 0 || chatCodes.length > 0) {
+          fetch('/api/cleanup/panic', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              dropCodes: Array.from(new Set(dropCodes)),
+              textCodes: Array.from(new Set(textCodes)),
+              chatCodes: Array.from(new Set(chatCodes)),
+            }),
+            keepalive: true,
+          }).catch(() => {});
+        }
+      } catch (err) {
+        console.error('Remote panic dispatch error:', err);
+      }
+    }
+
     this.wipeAll();
     if (typeof window !== 'undefined') {
       window.location.replace(PHANTOM_CONFIG.PANIC_REDIRECT_URL || '/');

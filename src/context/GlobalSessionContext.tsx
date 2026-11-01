@@ -406,15 +406,6 @@ export function GlobalSessionProvider({ children }: { children: React.ReactNode 
         }
       })
       .on('presence', { event: 'join' }, ({ newPresences }) => {
-        const currentCount = Object.keys(newChannel.presenceState()).length;
-        if (currentCount > config.maxUsers) {
-          if (!config.isCreator) {
-            toast.error('Session is full.', { id: `full-${id}`, duration: 2500 });
-            removeActiveSession(id);
-            return;
-          }
-        }
-
         const newlyJoinedId = newPresences[0]?.user || 'A user';
         
         setActiveSessions(prev => prev.map(s => s.id === id && s.type === 'chat' ? { ...s, connected: true } : s));

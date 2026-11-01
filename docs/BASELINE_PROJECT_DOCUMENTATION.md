@@ -94,3 +94,4 @@ Prior to the updates in this chat, the platform faced several real-world UX and 
 4. **Traffic Surge Vulnerability:** Under heavy database concurrency or pool exhaustion, uploads failed with raw database errors without clear user messaging.
 5. **Theme Contrast Gaps:** Certain headlines used hardcoded white text, rendering them invisible when switching to light theme.
 6. **Heavy Initial Bundle:** File viewers (`xlsx`, `mammoth`, `pdfjs-dist`) were loaded synchronously in the root layout, increasing initial JavaScript size and lowering PageSpeed scores.
+

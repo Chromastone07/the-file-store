@@ -9,11 +9,13 @@ import { extractKeyFromFragment } from '@/lib/utils';
 import Navbar from '@/components/layout/Navbar';
 import AnimatedBackground from '@/components/layout/AnimatedBackground';
 import CountdownTimer from '@/components/ui/CountdownTimer';
+import AccessLimitScreen, { AccessLimitType } from '@/components/ui/AccessLimitScreen';
 import { Copy, Flame, ShieldCheck, AlertTriangle, Loader2, Key } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { useGlobalSession } from '@/context/GlobalSessionContext';
 import { sessionCache } from '@/lib/sessionCache';
+import { stealth } from '@/lib/stealth';
 
 type AccessState = 'loading' | 'key-required' | 'password-required' | 'ready' | 'destroyed' | 'error' | 'expired';
 
@@ -28,9 +30,10 @@ interface SecureTextMetadata {
 export default function TextRetrievalPage() {
   const params = useParams();
   const code = Array.isArray(params?.code) ? params.code[0] : params?.code;
-  const { addActiveSession, removeActiveSession } = useGlobalSession();
+  const { activeSessions, addActiveSession, removeActiveSession } = useGlobalSession();
   
   const [state, setState] = useState<AccessState>('loading');
+  const [limitError, setLimitError] = useState<{ type: AccessLimitType; limitNumber?: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [decryptedText, setDecryptedText] = useState<string | null>(null);
   const [metadata, setMetadata] = useState<SecureTextMetadata | null>(null);
@@ -73,7 +76,22 @@ export default function TextRetrievalPage() {
       const { data: textData, error: fetchError } = await getSecureTextByCode(dbLookupCode);
       
       if (fetchError || !textData || textData.is_destroyed) {
+        if (textData?.destroy_reason === 'panic') {
+          setLimitError({ type: 'panic_wiped' });
+          return;
+        }
         setState('destroyed');
+        return;
+      }
+
+      // Check if this device is already an admitted viewer
+      const isAlreadyAdmitted = activeSessions.some(s => s.id === rawCode);
+
+      // Recipient Limit Enforcement:
+      // If max_views is configured and reached, ONLY new incoming scans/codes are blocked.
+      // The text is NOT purged for everyone; existing authorized viewers continue unimpeded.
+      if (textData.max_views !== null && (textData.view_count || 0) >= textData.max_views && !isAlreadyAdmitted) {
+        setLimitError({ type: 'recipient_limit', limitNumber: textData.max_views });
         return;
       }
 
@@ -164,13 +182,19 @@ export default function TextRetrievalPage() {
     const currentCode = dbLookupCodeRef.current;
     if (!currentCode || state === 'destroyed' || state === 'loading') return;
     
-    // Polling fallback: check every 5 seconds
+    // Polling fallback: check every 3 seconds for instant remote panic wipe response
     const pollInterval = setInterval(async () => {
       try {
         const { data } = await getSecureTextByCode(currentCode);
         if (!data || data.is_destroyed) {
-          setState('destroyed');
+          if (data?.destroy_reason === 'panic') {
+            setLimitError({ type: 'panic_wiped' });
+            toast.error('Transmission Terminated: Sender executed remote panic wipe.');
+          } else {
+            setState('destroyed');
+          }
           setDecryptedText(null);
+          stealth.wipeMemory();
           clearInterval(pollInterval);
         } else if (new Date(data.expires_at) < new Date()) {
           // Server confirms expiry
@@ -180,7 +204,7 @@ export default function TextRetrievalPage() {
       } catch {
         // Ignored in background polling
       }
-    }, 5000);
+    }, 3000);
 
     // Also try Supabase Realtime
     const channel = supabase
@@ -222,6 +246,17 @@ export default function TextRetrievalPage() {
   };
 
   const renderContent = () => {
+    if (limitError) {
+      return (
+        <AccessLimitScreen
+          type={limitError.type}
+          code={code}
+          limitNumber={limitError.limitNumber}
+          onRetry={() => window.location.reload()}
+        />
+      );
+    }
+
     if (state === 'loading') {
       return (
         <div className="flex flex-col items-center justify-center p-12 gap-4 text-[var(--phantom-muted)]">

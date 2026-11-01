@@ -26,7 +26,7 @@ import CountdownTimer from '@/components/ui/CountdownTimer';
 import SpotlightCard from '@/components/ui/SpotlightCard';
 import QRCode from 'qrcode';
 import { useSenderHistory, SenderHistoryItem, DestroyReason } from '@/hooks/useSenderHistory';
-import { supabase, destroyDrop, destroySecureText, getDropsByLookupCode, getSecureTextByCode } from '@/lib/supabase';
+import { supabase, destroyDrop, destroySecureText, getDropsByLookupCode, getSecureTextByCode, getClipboardSession } from '@/lib/supabase';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
@@ -91,6 +91,11 @@ export default function ManagePage() {
                 lastAccessedAt: text.last_accessed_at || undefined,
               });
             } else {
+              markAsDestroyed(item.id, 'ttl');
+            }
+          } else if (item.type === 'clipboard') {
+            const { data: session } = await getClipboardSession(item.rawCode);
+            if (!session || new Date(session.expires_at) < new Date()) {
               markAsDestroyed(item.id, 'ttl');
             }
           }
@@ -161,6 +166,12 @@ export default function ManagePage() {
         await destroyDrop(item.dbLookupCode);
       } else if (item.type === 'text') {
         await destroySecureText(item.dbLookupCode);
+      } else if (item.type === 'clipboard') {
+        await fetch('/api/chat/session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'destroy', roomCode: item.rawCode })
+        });
       }
       markAsDestroyed(item.id, 'manual');
       setDestroyConfirmId(null);
@@ -173,7 +184,7 @@ export default function ManagePage() {
   const getDestroyBadge = (reason?: DestroyReason) => {
     switch (reason) {
       case 'burn':
-        return <span className="text-amber-400 font-medium flex items-center gap-1"><Flame className="w-3 h-3" /> Burned</span>;
+        return <span className="text-amber-400 font-medium flex items-center gap-1"><Flame className="w-3 h-3" /> Burned / Limit</span>;
       case 'ttl':
         return <span className="text-[var(--wisp-muted)] font-medium flex items-center gap-1"><Clock className="w-3 h-3" /> Expired</span>;
       case 'panic':

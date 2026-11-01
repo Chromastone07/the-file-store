@@ -283,8 +283,10 @@ export function useFileUpload(type: 'drop' | 'text' = 'drop') {
   const destructText = useCallback(async (sessionCode: string) => {
     const dbLookupCode = await hashString(sessionCode);
     await destroySecureText(dbLookupCode);
-    markAsDestroyed(sessionCode);
-    globalSession.resetText();
+    markAsDestroyed(sessionCode, 'manual');
+    if (globalSession.textResult?.sessionCode === sessionCode) {
+      globalSession.setTextResult({ ...globalSession.textResult, isDestroyed: true });
+    }
   }, [globalSession, markAsDestroyed]);
 
   return {

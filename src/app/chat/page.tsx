@@ -5,11 +5,14 @@ import { motion } from 'framer-motion';
 import { useGlobalSession, ActiveSession, ChatMessage } from '@/context/GlobalSessionContext';
 import { generateFriendlyAlias } from '@/lib/crypto';
 import { WISP_CONFIG } from '@/lib/config';
+import { useSenderHistory } from '@/hooks/useSenderHistory';
 import Navbar from '@/components/layout/Navbar';
 import Footer from '@/components/layout/Footer';
 import AnimatedBackground from '@/components/layout/AnimatedBackground';
 import ExpiryControl from '@/components/ui/ExpiryControl';
 import SpotlightCard from '@/components/ui/SpotlightCard';
+import CountdownTimer from '@/components/ui/CountdownTimer';
+import AccessLimitScreen from '@/components/ui/AccessLimitScreen';
 import QRCode from 'qrcode';
 import { 
   MessageSquare, 
@@ -23,7 +26,10 @@ import {
   X, 
   Share2, 
   ArrowDown,
-  QrCode as QrCodeIcon
+  QrCode as QrCodeIcon,
+  ShieldAlert,
+  Clock,
+  RotateCcw
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -37,6 +43,8 @@ export default function ChatPage() {
     openQRScanner
   } = useGlobalSession();
 
+  const { addHistoryItem, markAsDestroyed } = useSenderHistory();
+
   const [activeTab, setActiveTab] = useState<'create' | 'join'>('create');
   const [joinCode, setJoinCode] = useState('');
   const [inputText, setInputText] = useState('');
@@ -44,6 +52,11 @@ export default function ChatPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
+  const [joinError, setJoinError] = useState<{
+    code: string;
+    type: 'room_full' | 'room_not_found';
+    maxUsers?: number;
+  } | null>(null);
 
   // Settings for creator
   const [durationSeconds, setDurationSeconds] = useState(5 * 60);
@@ -143,8 +156,16 @@ export default function ChatPage() {
         });
 
         if (!res.ok) {
-          const err = await res.json();
-          toast.error(err.error || 'Failed to join chat room');
+          const err = await res.json().catch(() => ({}));
+          if (err.error === 'ROOM_FULL') {
+            setJoinError({ code: effectiveChatId, type: 'room_full', maxUsers: err.maxUsers });
+            toast.error(err.message || 'Chat room is full');
+          } else if (res.status === 404 || err.error === 'ROOM_NOT_FOUND' || res.status === 410 || err.error === 'ROOM_EXPIRED') {
+            setJoinError({ code: effectiveChatId, type: 'room_not_found' });
+            toast.error(err.message || 'Chat room not found or expired');
+          } else {
+            toast.error(err.message || err.error || 'Failed to join chat room');
+          }
           window.history.replaceState({}, '', '/chat');
           setSelectedRoomCode(null);
           return;
@@ -160,6 +181,18 @@ export default function ChatPage() {
           color: data.color,
         });
         setOnlineCount(data.onlineCount || 1);
+        setJoinError(null);
+
+        // Record in Sender History so it is persisted in logs & manage view
+        addHistoryItem({
+          id: effectiveChatId,
+          type: 'clipboard',
+          rawCode: effectiveChatId,
+          dbLookupCode: effectiveChatId,
+          nameOrSnippet: `Chat Room (${data.maxUsers || 2} max)`,
+          expiresAt: new Date(data.expiresAt).toISOString(),
+          createdAt: new Date().toISOString(),
+        });
       } catch {
         toast.error('Network error joining room');
       } finally {
@@ -281,8 +314,20 @@ export default function ChatPage() {
         color: myAlias.color,
       });
 
+      // Record created chat session in persistent sender history & logs
+      addHistoryItem({
+        id: code,
+        type: 'clipboard',
+        rawCode: code,
+        dbLookupCode: code,
+        nameOrSnippet: `Chat Room (${finalMaxUsers} users max)`,
+        expiresAt: new Date(data.expiresAt).toISOString(),
+        createdAt: new Date().toISOString(),
+      });
+
       setIsCreatingNewRoom(false);
       setSelectedRoomCode(code);
+      setJoinError(null);
       window.history.pushState({}, '', `/chat?join=${code}`);
       toast.success('Chat room created');
     } catch (err) {
@@ -311,8 +356,16 @@ export default function ChatPage() {
       });
 
       if (!res.ok) {
-        const err = await res.json();
-        toast.error(err.error || 'Failed to join chat room');
+        const err = await res.json().catch(() => ({}));
+        if (err.error === 'ROOM_FULL') {
+          setJoinError({ code: cleanCode, type: 'room_full', maxUsers: err.maxUsers });
+          toast.error(err.message || 'Chat room is full');
+        } else if (res.status === 404 || err.error === 'ROOM_NOT_FOUND' || res.status === 410 || err.error === 'ROOM_EXPIRED') {
+          setJoinError({ code: cleanCode, type: 'room_not_found' });
+          toast.error(err.message || 'Chat room not found or expired');
+        } else {
+          toast.error(err.message || err.error || 'Failed to join chat room');
+        }
         return;
       }
 
@@ -326,9 +379,21 @@ export default function ChatPage() {
         color: data.color,
       });
 
+      // Record joined room in persistent history
+      addHistoryItem({
+        id: cleanCode,
+        type: 'clipboard',
+        rawCode: cleanCode,
+        dbLookupCode: cleanCode,
+        nameOrSnippet: `Chat Room (${data.maxUsers || 2} users max)`,
+        expiresAt: new Date(data.expiresAt).toISOString(),
+        createdAt: new Date().toISOString(),
+      });
+
       setIsCreatingNewRoom(false);
       setSelectedRoomCode(cleanCode);
       setJoinCode('');
+      setJoinError(null);
       window.history.pushState({}, '', `/chat?join=${cleanCode}`);
       toast.success(data.isReconnect ? 'Reconnected to chat room' : 'Connected to chat room');
     } catch {
@@ -371,6 +436,7 @@ export default function ChatPage() {
     } catch {
       // Continue cleanup
     }
+    markAsDestroyed(currentId, activeChatSession?.config?.isCreator ? 'manual' : 'burn');
     removeActiveSession(currentId);
     setShowDestroyConfirm(false);
     toast.info(activeChatSession?.config?.isCreator ? 'Chat room destroyed' : 'Left chat room');
@@ -519,7 +585,25 @@ export default function ChatPage() {
             </div>
           )}
 
-          {!activeChatSession ? (
+          {joinError ? (
+            /* ── Screen: Access Denied / Capacity Reached / Not Found ── */
+            <div className="flex flex-col w-full max-h-full justify-center my-auto">
+              <AccessLimitScreen
+                type={joinError.type}
+                code={joinError.code}
+                limitNumber={joinError.maxUsers}
+                onRetry={() => {
+                  setJoinError(null);
+                  setActiveTab('join');
+                }}
+                onReset={() => {
+                  setJoinError(null);
+                  setIsCreatingNewRoom(true);
+                  setActiveTab('create');
+                }}
+              />
+            </div>
+          ) : !activeChatSession ? (
             /* ── Screen 1: Create or Join Room (fits in first viewport) ── */
             <div className="flex flex-col w-full max-h-full justify-center my-auto">
               
@@ -737,6 +821,38 @@ export default function ChatPage() {
                 </SpotlightCard>
 
               </div>
+
+              {/* Mobile & Desktop Quick Reopen for Active / Abandoned Sessions */}
+              {activeChatSessions.length > 0 && (
+                <div className="mt-4 p-3 bg-[var(--wisp-surface-glass)] border border-[var(--wisp-border)] rounded-2xl backdrop-blur-md">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                      <span className="text-xs font-bold text-[var(--wisp-text)]">Reopen Active Chat Rooms</span>
+                    </div>
+                    <span className="text-[10px] text-[var(--wisp-muted)] font-mono">{activeChatSessions.length} active</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {activeChatSessions.map(session => (
+                      <button
+                        key={session.id}
+                        onClick={() => {
+                          setIsCreatingNewRoom(false);
+                          setSelectedRoomCode(session.id);
+                          window.history.pushState({}, '', `/chat?join=${session.id}`);
+                        }}
+                        className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[var(--wisp-elevated)] hover:bg-[var(--wisp-border)] border border-[var(--wisp-border)] text-xs font-mono font-bold text-[var(--wisp-text)] transition-colors cursor-pointer"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5 text-indigo-400" />
+                        <span>Reopen {session.id}</span>
+                        {session.config.isCreator && (
+                          <span className="text-[9px] px-1 bg-indigo-500/20 text-indigo-300 rounded font-sans font-normal">Host</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
 
             </div>
           ) : (

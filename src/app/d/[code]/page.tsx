@@ -9,9 +9,11 @@ import type { DropRecord } from '@/lib/supabase';
 import { getFileCategory, extractKeyFromFragment } from '@/lib/utils';
 import Navbar from '@/components/layout/Navbar';
 import AnimatedBackground from '@/components/layout/AnimatedBackground';
+import AccessLimitScreen, { AccessLimitType } from '@/components/ui/AccessLimitScreen';
 import { useGlobalSession } from '@/context/GlobalSessionContext';
 import { stealth } from '@/lib/stealth';
 import { sessionCache } from '@/lib/sessionCache';
+import { toast } from 'sonner';
 
 type AccessState = 'loading' | 'password-required' | 'key-required' | 'decrypting' | 'destroyed' | 'error' | 'expired';
 
@@ -26,11 +28,12 @@ export default function AccessDropPage() {
   const rawParam = params?.code;
   const code = (Array.isArray(rawParam) ? rawParam[0] : rawParam) || '';
   
-  const { addActiveSession, setViewingSessionId } = useGlobalSession();
+  const { activeSessions, addActiveSession, setViewingSessionId } = useGlobalSession();
   const router = useRouter();
   
   const [state, setState] = useState<AccessState>('loading');
   const [drops, setDrops] = useState<DropRecord[]>([]);
+  const [limitError, setLimitError] = useState<{ type: AccessLimitType; limitNumber?: number } | null>(null);
   const [password, setPassword] = useState('');
   const [manualKey, setManualKey] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -53,18 +56,36 @@ export default function AccessDropPage() {
         if (dropList && dropList.length > 0) {
           const activeDrops = dropList.filter(d => !d.is_destroyed);
           if (activeDrops.length === 0) {
+            const first = dropList[0];
+            if (first.destroy_reason === 'panic') {
+              setLimitError({ type: 'panic_wiped' });
+              return;
+            }
             setState('destroyed');
             return;
           }
 
+          const first = activeDrops[0];
+          
+          // Check if this device is already an admitted viewer
+          const isAlreadyAdmitted = activeSessions.some(s => s.id === rawCode);
+
+          // Recipient Limit Enforcement:
+          // If max_views is configured and reached, ONLY new incoming scans/codes are blocked.
+          // The file is NOT purged for everyone; existing authorized viewers continue unimpeded.
+          if (first.max_views !== null && (first.view_count || 0) >= first.max_views && !isAlreadyAdmitted) {
+            setLimitError({ type: 'recipient_limit', limitNumber: first.max_views });
+            return;
+          }
+
           const now = new Date();
-          if (now > new Date(activeDrops[0].expires_at)) {
+          if (now > new Date(first.expires_at)) {
             setState('expired');
             return;
           }
           
           setDrops(activeDrops);
-          if (activeDrops[0].has_password) {
+          if (first.has_password) {
             setState('password-required');
           } else {
             handleDecryption(activeDrops);
@@ -83,6 +104,33 @@ export default function AccessDropPage() {
     if (code) fetchDrop();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code]);
+
+  // Real-time polling to detect remote panic wipe or destroy while viewing
+  useEffect(() => {
+    const currentCode = dbLookupCodeRef.current;
+    if (!currentCode || limitError || state === 'destroyed' || state === 'loading') return;
+
+    const interval = setInterval(async () => {
+      try {
+        const { data: dropList } = await getDropsByLookupCode(currentCode);
+        if (!dropList || dropList.length === 0 || dropList.every(d => d.is_destroyed)) {
+          stealth.wipeMemory();
+          const first = dropList?.[0];
+          if (first?.destroy_reason === 'panic') {
+            setLimitError({ type: 'panic_wiped' });
+            toast.error('Transmission Terminated: Sender executed remote panic wipe.');
+          } else {
+            setLimitError({ type: 'burned' });
+          }
+          clearInterval(interval);
+        }
+      } catch {
+        // Blip
+      }
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [limitError, state]);
 
   const handleDecryption = async (dropList: DropRecord[], providedPassword?: string) => {
     setState('decrypting');
@@ -215,8 +263,18 @@ export default function AccessDropPage() {
       
       <main className="flex-1 container mx-auto px-4 py-12 flex flex-col items-center justify-center z-10">
         
+        {/* Recipient Limit / Remote Panic Wipe Screen */}
+        {limitError && (
+          <AccessLimitScreen
+            type={limitError.type}
+            code={code}
+            limitNumber={limitError.limitNumber}
+            onRetry={() => window.location.reload()}
+          />
+        )}
+
         {/* Loading / Decrypting */}
-        {(state === 'loading' || state === 'decrypting') && (
+        {!limitError && (state === 'loading' || state === 'decrypting') && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="panel w-full max-w-md mx-auto py-12 flex flex-col items-center justify-center">
             <div className="w-[34px] h-[34px] rounded-full border-2 border-[var(--phantom-border)] border-t-[var(--phantom-glow)] mb-5 animate-spin"></div>
             <p className="text-[13.5px] text-[var(--phantom-muted)] text-center">
@@ -225,7 +283,7 @@ export default function AccessDropPage() {
           </motion.div>
         )}
 
-        {state === 'password-required' && (
+        {!limitError && state === 'password-required' && (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md bg-[var(--phantom-surface)] border border-[var(--phantom-border)] rounded-xl p-8">
             <div className="text-center mb-6">
               <div className="w-16 h-16 bg-[var(--phantom-elevated)] rounded-full flex items-center justify-center mx-auto mb-4">
@@ -241,7 +299,7 @@ export default function AccessDropPage() {
           </motion.div>
         )}
 
-        {state === 'key-required' && (
+        {!limitError && state === 'key-required' && (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md bg-[var(--phantom-surface)] border border-[var(--phantom-border)] rounded-xl p-8">
             <div className="text-center mb-6">
               <div className="w-16 h-16 bg-[var(--phantom-elevated)] rounded-full flex items-center justify-center mx-auto mb-4">
@@ -258,7 +316,7 @@ export default function AccessDropPage() {
         )}
 
         {/* Expired / Destroyed */}
-        {(state === 'destroyed' || state === 'expired') && (
+        {!limitError && (state === 'destroyed' || state === 'expired') && (
           <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="panel w-full max-w-md mx-auto text-center py-8">
             <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-5 bg-[var(--phantom-elevated)] border ${state === 'destroyed' ? 'border-[var(--phantom-muted)]/30' : 'border-[var(--phantom-danger)]/30'}`}>
               {state === 'destroyed' ? (

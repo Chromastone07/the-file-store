@@ -120,7 +120,7 @@ DECLARE
 BEGIN
   SELECT view_count, max_views INTO v_view_count, v_max_views FROM drops WHERE session_code = p_code;
   IF FOUND THEN
-    v_should_destroy := p_burn OR (v_max_views IS NOT NULL AND (v_view_count + 1) >= v_max_views);
+    v_should_destroy := p_burn;
     UPDATE drops SET view_count = view_count + 1, is_destroyed = v_should_destroy WHERE session_code = p_code;
   END IF;
 END;
@@ -158,7 +158,7 @@ DECLARE
 BEGIN
   SELECT view_count, max_views INTO v_view_count, v_max_views FROM secure_texts WHERE session_code = p_code;
   IF FOUND THEN
-    v_should_destroy := p_burn OR (v_max_views IS NOT NULL AND (v_view_count + 1) >= v_max_views);
+    v_should_destroy := p_burn;
     UPDATE secure_texts SET view_count = view_count + 1, is_destroyed = v_should_destroy WHERE session_code = p_code;
   END IF;
 END;

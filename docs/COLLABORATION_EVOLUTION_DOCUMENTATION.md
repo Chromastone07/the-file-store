@@ -369,6 +369,36 @@ To monitor production visitor traffic, geographical reach, and live Core Web Vit
 
 ---
 
+### Feature 14: Security Hardening, Non-Destructive Recipient Limits & True Remote Panic Wipe
+
+#### 1. What was added:
+- **Non-Destructive Recipient Limit Enforcement:** Allowed senders to restrict downloads/views to 1, 2, 3, 5, or custom recipients. When excess recipients attempt to access, they receive an explicit barrier screen ("User Access Limit Reached"), while existing authorized recipients keep uninterrupted viewing access without premature file deletion.
+- **True Remote Panic Wipe:** Enabled senders to trigger emergency eradication from their device that remotely purges server blobs, database records, and immediately evicts all active viewing sessions across recipient screens.
+- **Ghost Room Prevention:** Strictly rejected non-existent or text codes in Join Chat with 404 `ROOM_NOT_FOUND`, preventing accidental auto-creation of ghost rooms.
+- **Chat Capacity & Kick-Out Immunity:** Fixed participant eviction bug so existing members are never ejected when excess users knock on the door.
+- **Persistent Activity & Destruction Logs:** Tracked metadata history of past destroyed drops, texts, and chats in Session Manager.
+- **Automated Security Defense Test Suite:** 30 automated security tests covering DDoS/Rate Limiting, SQL Injection, XSS sanitization, Chat overflow resistance, Ghost room prevention, and Panic wipe isolation.
+
+#### 2. Why we felt like adding it:
+To ensure file sharing remains strictly controlled without accidental self-destruction when uninvited guests scan QR codes, while giving senders absolute power over remote panic destruction.
+
+#### 3. What tools & libraries we used:
+- Sliding-window in-memory rate limiter (`src/lib/rateLimit.ts`)
+- Client-side buffer sanitization (`StealthEngine.wipeMemory()`)
+- Keepalive fetch for remote panic wipe (`/api/cleanup/panic`)
+- Automated Node.js defense test suite (`scripts/security-defense-test.mjs`)
+
+#### 4. Related Pages & Files:
+- `src/components/ui/RecipientLimitSelector.tsx` *(Preset & custom recipient selector)*
+- `src/components/ui/AccessLimitScreen.tsx` *(Barrier screens for room full, user limit, panic wipe)*
+- `src/app/api/receipt/route.ts` *(Preserves storage blobs on recipient limit reach; only burns on BAR)*
+- `src/app/api/cleanup/panic/route.ts` *(Remote panic wipe endpoint)*
+- `src/app/d/[code]/page.tsx` & `src/app/t/[code]/page.tsx` *(Enforces recipient limits for new users without interrupting existing viewers)*
+- `src/components/ui/SessionDock.tsx` *(Mobile trigger visibility & panic wipe response)*
+- `scripts/security-defense-test.mjs` *(Comprehensive security defense test suite)*
+
+---
+
 ## 3. Summary of Files Created & Modified in This Chat
 
 | File Path | Type | Role in Evolution |
@@ -381,13 +411,27 @@ To monitor production visitor traffic, geographical reach, and live Core Web Vit
 | `scripts/update-ghost-pwa-icon.js` | New | Sharp SVG icon generation pipeline |
 | `public/icons/*` | New | Generated 512, 192, Apple touch, and favicon assets |
 | `src/components/ui/CapacityOverloadScreen.tsx` | New | Database capacity surge and rate limit screen |
+| `src/components/ui/AccessLimitScreen.tsx` | New | Dedicated barriers for user limits, room capacity, and panic wipe |
+| `src/components/ui/RecipientLimitSelector.tsx` | New | Configurable recipient limits (1, 2, 3, 5, custom, unlimited) |
+| `src/lib/rateLimit.ts` | New | In-memory sliding-window DDoS and brute-force protector |
+| `src/app/api/cleanup/panic/route.ts` | New | Emergency remote panic wipe endpoint |
+| `scripts/security-defense-test.mjs` | New | 30 automated security defense tests (SQLi, XSS, DDoS, Overflow) |
 | `src/app/api/health/route.ts` | New | Live PostgreSQL connection health probe |
 | `src/app/page.tsx` | Modified | Minimal hero, Outfit typography, theme contrast, QR button |
 | `src/app/layout.tsx` | Modified | Viewport zoom fix, variable Outfit font, Analytics & Speed Insights |
 | `src/components/layout/Navbar.tsx` | Modified | Removed header logo box, streamlined navigation space |
-| `src/components/ui/SessionDock.tsx` | Modified | Code-split dynamic imports for viewer and scanner |
+| `src/components/ui/SessionDock.tsx` | Modified | Mobile-visible trigger dock, code-split dynamic imports, remote wipe handler |
 | `src/components/viewers/FileViewerModal.tsx` | Modified | On-demand dynamic loading for heavy file viewers |
 | `src/components/layout/AnimatedBackground.tsx` | Modified | Squared distance particle loop optimization & hydration deferral |
 | `src/lib/config.ts` | Modified | Default expiration preset set to 5 minutes |
 | `src/components/ui/ExpiryControl.tsx` | Modified | Reordered duration presets to prioritize 5m |
 | `next.config.ts` | Modified | Added `optimizePackageImports` for lucide-react & framer-motion |
+| `src/app/api/receipt/route.ts` | Modified | Separated recipient limits from file destruction |
+| `src/app/d/[code]/page.tsx` | Modified | Non-destructive recipient limit enforcement |
+| `src/app/t/[code]/page.tsx` | Modified | Non-destructive text recipient limit enforcement |
+| `src/app/chat/page.tsx` | Modified | Ghost room prevention, capacity error screens, mobile reopen drawer |
+| `src/app/manage/page.tsx` | Modified | Metadata destruction logs for drops, texts, and chats |
+| `src/hooks/useFileUpload.ts` | Modified | Recipient limit options & destruction state preservation |
+| `src/lib/stealth.ts` | Modified | Remote panic beacon dispatch & `wipeMemory()` zero-fill |
+| `supabase-migration.sql` | Modified | PostgreSQL RPC updates preserving multi-recipient files |
+

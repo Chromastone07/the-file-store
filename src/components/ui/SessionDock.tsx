@@ -9,7 +9,8 @@ import dynamic from 'next/dynamic';
 
 const FileViewerModal = dynamic(() => import('../viewers/FileViewerModal'), { ssr: false });
 const QRScannerModal = dynamic(() => import('./QRScannerModal'), { ssr: false });
-import { recordView, destroyDrop, getDropByCode } from '@/lib/supabase';
+import { recordView, destroyDrop, getDropByCode, getSecureTextByCode } from '@/lib/supabase';
+import { stealth } from '@/lib/stealth';
 import { toast } from 'sonner';
 
 export default function SessionDock() {
@@ -33,7 +34,7 @@ export default function SessionDock() {
   const pendingDestroyedRef = useRef<Set<string>>(new Set());
   const [triggerCleanup, setTriggerCleanup] = useState(0);
 
-  // Poll for destruction of active drops using RPC (bypasses RLS)
+  // Poll for destruction of active drops using RPC (bypasses RLS) - Immediate remote panic wipe response
   useEffect(() => {
     const dropSessions = activeSessions.filter((s): s is Extract<ActiveSession, { type: 'drop' }> => s.type === 'drop');
     if (dropSessions.length === 0) return;
@@ -44,45 +45,70 @@ export default function SessionDock() {
           const files = session.files;
           if (!files) continue;
 
-          let changed = false;
           for (const file of files) {
             const { data } = await getDropByCode(file.drop.session_code);
               
-            if (data) {
-              if (data.is_destroyed || new Date(data.expires_at) < new Date()) {
-                if (!pendingDestroyedRef.current.has(file.drop.session_code)) {
-                  pendingDestroyedRef.current.add(file.drop.session_code);
-                  changed = true;
-                }
+            if (!data || data.is_destroyed || new Date(data.expires_at) < new Date()) {
+              // Remote panic wipe or destroy triggered!
+              // 1. If currently viewing, close viewer immediately
+              if (viewingSessionId === session.id) {
+                setViewingSessionId(null);
               }
+              // 2. Revoke blob URLs and zero memory
+              files.forEach(f => {
+                if (f.blobUrl) {
+                  URL.revokeObjectURL(f.blobUrl);
+                  f.blobUrl = '';
+                }
+              });
+              stealth.wipeMemory();
+              // 3. Purge session from dock
+              removeActiveSession(session.id);
+              toast.error(`Transmission Purged: Session ${session.id} was securely destroyed or panic-wiped.`);
+              break;
             }
           }
-          if (changed) setTriggerCleanup(t => t + 1);
         }
       } catch {
         // Silent polling failure
       }
-    }, 5000);
+    }, 3000);
 
     return () => clearInterval(pollInterval);
-  }, [activeSessions]);
+  }, [activeSessions, viewingSessionId, removeActiveSession, setViewingSessionId]);
 
-  // Poll for expiry of active text sessions
+  // Poll for expiry & remote panic destruction of active text sessions
   useEffect(() => {
     const textSessions = activeSessions.filter((s): s is Extract<ActiveSession, { type: 'text' }> => s.type === 'text');
     if (textSessions.length === 0) return;
 
-    const textInterval = setInterval(() => {
+    const textInterval = setInterval(async () => {
       const now = Date.now();
       for (const session of textSessions) {
         if (session.expiresAt && new Date(session.expiresAt).getTime() <= now) {
+          if (viewingSessionId === session.id) setViewingSessionId(null);
+          stealth.wipeMemory();
           removeActiveSession(session.id);
+          toast.info(`Text session ${session.id} expired.`);
+          continue;
+        }
+
+        try {
+          const { data } = await getSecureTextByCode(session.id);
+          if (!data || data.is_destroyed) {
+            if (viewingSessionId === session.id) setViewingSessionId(null);
+            stealth.wipeMemory();
+            removeActiveSession(session.id);
+            toast.error(`Transmission Purged: Text session ${session.id} was wiped remotely.`);
+          }
+        } catch {
+          // Blip
         }
       }
-    }, 5000);
+    }, 3000);
 
     return () => clearInterval(textInterval);
-  }, [activeSessions, removeActiveSession]);
+  }, [activeSessions, viewingSessionId, removeActiveSession, setViewingSessionId]);
 
   const viewingSession = activeSessions.find(s => s.id === viewingSessionId);
   const viewingDropSession = viewingSession && viewingSession.type === 'drop' ? viewingSession : null;
@@ -169,8 +195,8 @@ export default function SessionDock() {
         )}
       </AnimatePresence>
 
-      {/* Floating Trigger Button (desktop corner) */}
-      <div className="hidden md:flex fixed bottom-6 right-6 z-40 flex-col items-end gap-3 pointer-events-none">
+      {/* Floating Trigger Button (mobile & desktop) */}
+      <div className="fixed bottom-20 md:bottom-6 right-4 md:right-6 z-40 flex flex-col items-end gap-3 pointer-events-none">
         {!isDockOpen && (
           <motion.button
             initial={{ opacity: 0, scale: 0.5 }}
