@@ -22,12 +22,16 @@ export default function AppSplashScreen() {
     if (isPreview || isStandalone) {
       const shown = sessionStorage.getItem("phantom_splash_shown");
       if (!shown || isPreview) {
-        setIsVisible(true);
+        const showTimer = setTimeout(() => setIsVisible(true), 0);
         if (!isPreview) {
           sessionStorage.setItem("phantom_splash_shown", "true");
           const timer = setTimeout(() => setIsVisible(false), 900);
-          return () => clearTimeout(timer);
+          return () => {
+            clearTimeout(showTimer);
+            clearTimeout(timer);
+          };
         }
+        return () => clearTimeout(showTimer);
       }
     }
   }, []);
@@ -40,7 +44,7 @@ export default function AppSplashScreen() {
           initial={{ opacity: 1 }}
           exit={{ opacity: 0, scale: 1.03 }}
           transition={{ duration: 0.35, ease: "easeInOut" }}
-          className="fixed inset-0 z-[9999] bg-[#07080f] flex flex-col items-center justify-center p-6 select-none pointer-events-auto"
+          className="fixed inset-0 z-[9999] bg-[var(--wisp-bg)] flex flex-col items-center justify-center p-6 select-none pointer-events-auto"
         >
           {/* Subtle Ambient Radial Glow */}
           <div className="absolute w-96 h-96 rounded-full bg-cyan-500/10 blur-[100px] pointer-events-none" />

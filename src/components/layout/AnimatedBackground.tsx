@@ -143,7 +143,6 @@ export default function AnimatedBackground() {
     });
 
     let animationFrameId: number;
-    let startTimeoutId: ReturnType<typeof setTimeout>;
 
     const render = () => {
       const particleColor = `rgba(${glowRgb}, 0.6)`;
@@ -202,7 +201,7 @@ export default function AnimatedBackground() {
     };
 
     // Defer start by 150ms to allow smooth initial React hydration & layout without blocking main thread
-    startTimeoutId = setTimeout(() => {
+    const startTimeoutId = setTimeout(() => {
       render();
     }, 150);
 

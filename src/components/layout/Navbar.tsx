@@ -11,14 +11,17 @@ import { useGlobalSession } from "@/context/GlobalSessionContext";
 export default function Navbar() {
   const pathname = usePathname();
   const { activeSessions, isDockOpen, setIsDockOpen, openQRScanner } = useGlobalSession();
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [theme, setTheme] = useState<"dark" | "light">("light");
   const [stealthActive, setStealthActive] = useState(false);
   const [shieldMenuOpen, setShieldMenuOpen] = useState(false);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const savedTheme = localStorage.getItem(WISP_CONFIG.STORAGE_KEYS.THEME) || localStorage.getItem("phantom-theme");
-    if (savedTheme === "light") {
+    if (savedTheme === "dark") {
+      setTheme("dark");
+      document.documentElement.removeAttribute("data-theme");
+    } else {
       setTheme("light");
       document.documentElement.setAttribute("data-theme", "light");
     }

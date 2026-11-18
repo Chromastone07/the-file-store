@@ -229,20 +229,17 @@ export default function DropPage() {
       <AnimatedBackground />
       <Navbar />
 
-      <main className="flex-1 min-h-0 flex flex-col justify-center px-4 sm:px-6 pt-2 mobile-bottom-clearance z-10">
+      <main className="flex-1 min-h-0 flex flex-col justify-start sm:justify-center px-4 sm:px-6 pt-2 mobile-bottom-clearance overflow-y-auto wisp-scrollbar z-10">
         <motion.div 
           initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
-          className="w-full max-w-2xl mx-auto flex flex-col justify-center"
+          className="w-full max-w-2xl mx-auto flex flex-col my-auto"
         >
           {/* Header Title */}
           <div className="text-center mb-2.5 sm:mb-4">
             <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-[var(--wisp-text)]">
               Drop File
             </h1>
-            <p className="text-xs sm:text-sm text-[var(--wisp-muted)]">
-              Anonymous, encrypted file sharing. Files self-destruct after download or expiry.
-            </p>
           </div>
 
           <AnimatePresence mode="wait">

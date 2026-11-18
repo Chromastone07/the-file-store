@@ -150,20 +150,17 @@ export default function TextPage() {
       <AnimatedBackground />
       <Navbar />
 
-      <main className="flex-1 min-h-0 flex flex-col justify-center px-4 sm:px-6 pt-2 mobile-bottom-clearance z-10">
+      <main className="flex-1 min-h-0 flex flex-col justify-start sm:justify-center px-4 sm:px-6 pt-2 mobile-bottom-clearance overflow-y-auto wisp-scrollbar z-10">
         <motion.div
           initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
-          className="w-full max-w-3xl mx-auto flex flex-col justify-center"
+          className="w-full max-w-3xl mx-auto flex flex-col my-auto"
         >
           {/* Header Title (compact) */}
           <div className="text-center mb-2 sm:mb-3">
             <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-[var(--wisp-text)]">
               Secure Text
             </h1>
-            <p className="text-xs sm:text-sm text-[var(--wisp-muted)]">
-              Passwords, API keys, code snippets, or confidential notes. Client-side encrypted.
-            </p>
           </div>
 
           <AnimatePresence mode="wait">
@@ -236,10 +233,7 @@ export default function TextPage() {
                           <div className="w-7 h-7 rounded-lg bg-amber-500/10 text-amber-500 flex items-center justify-center shrink-0">
                             <Flame className="w-4 h-4" />
                           </div>
-                          <div>
-                            <div className="font-semibold text-[11px] sm:text-xs text-[var(--wisp-text)]">Burn after reading</div>
-                            <div className="text-[10px] text-[var(--wisp-muted)]">Purge permanently after first access</div>
-                          </div>
+                          <span className="font-semibold text-xs text-[var(--wisp-text)]">Burn after reading</span>
                         </div>
                         <input
                           type="checkbox"
@@ -259,10 +253,7 @@ export default function TextPage() {
                           <div className="w-7 h-7 rounded-lg bg-indigo-500/10 text-indigo-500 flex items-center justify-center shrink-0">
                             <KeyRound className="w-4 h-4" />
                           </div>
-                          <div>
-                            <div className="font-semibold text-[11px] sm:text-xs text-[var(--wisp-text)]">Password protect</div>
-                            <div className="text-[10px] text-[var(--wisp-muted)]">Require a secret unlock password</div>
-                          </div>
+                          <span className="font-semibold text-xs text-[var(--wisp-text)]">Password protect</span>
                         </div>
                         <input
                           type="checkbox"

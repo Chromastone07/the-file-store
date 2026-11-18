@@ -26,7 +26,7 @@ export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
   viewportFit: 'cover',
-  themeColor: '#07070f',
+  themeColor: '#f8fafc',
 };
 
 export const metadata: Metadata = {
@@ -41,7 +41,7 @@ export const metadata: Metadata = {
   },
   appleWebApp: {
     capable: true,
-    statusBarStyle: 'black-translucent',
+    statusBarStyle: 'default',
     title: 'Phantom',
   },
   openGraph: {
@@ -53,7 +53,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning data-scroll-behavior="smooth">
+    <html lang="en" data-theme="light" suppressHydrationWarning data-scroll-behavior="smooth">
       <head>
         <meta name="referrer" content="no-referrer" />
         <meta httpEquiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
@@ -62,8 +62,24 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
-        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="default" />
         <meta name="apple-mobile-web-app-title" content="Phantom" />
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              (function() {
+                try {
+                  var saved = localStorage.getItem('phantom_theme') || localStorage.getItem('phantom-theme');
+                  if (saved === 'dark') {
+                    document.documentElement.removeAttribute('data-theme');
+                  } else {
+                    document.documentElement.setAttribute('data-theme', 'light');
+                  }
+                } catch (e) {}
+              })();
+            `,
+          }}
+        />
       </head>
       <body className={`${outfit.variable} ${jetbrainsMono.variable} font-sans antialiased bg-[var(--wisp-bg)] text-[var(--wisp-text)] min-h-screen flex flex-col`}>
         <AppSplashScreen />
@@ -80,7 +96,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             visibleToasts={1}
             duration={2200}
             closeButton={false}
-            theme="dark"
+            theme="light"
           />
         </GlobalSessionProvider>
       </body>

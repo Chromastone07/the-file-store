@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "the-file-store",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2025-06-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "the-file-store"
+    }
+  ],
+  "vars": {
+    "NEXT_PUBLIC_SUPABASE_URL": "https://your-project.supabase.co",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY": "your-anon-key"
+  }
+}

@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useGlobalSession, ActiveSession, DecryptedFile } from '@/context/GlobalSessionContext';
 import { Shield, X, MessageSquare, FileText, Activity } from 'lucide-react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import dynamic from 'next/dynamic';
 
 const FileViewerModal = dynamic(() => import('../viewers/FileViewerModal'), { ssr: false });
@@ -26,13 +26,15 @@ export default function SessionDock() {
     qrScannerCallback
   } = useGlobalSession();
   const router = useRouter();
+  const pathname = usePathname();
+  const isChat = pathname === '/chat' || pathname?.startsWith('/chat');
   
   const [activeFileIndex, setActiveFileIndex] = useState(0);
 
   // BAR Tracking
   const viewRecordedRef = useRef<Set<string>>(new Set());
   const pendingDestroyedRef = useRef<Set<string>>(new Set());
-  const [triggerCleanup, setTriggerCleanup] = useState(0);
+  const [triggerCleanup] = useState(0);
 
   // Poll for destruction of active drops using RPC (bypasses RLS) - Immediate remote panic wipe response
   useEffect(() => {
@@ -195,24 +197,26 @@ export default function SessionDock() {
         )}
       </AnimatePresence>
 
-      {/* Floating Trigger Button (mobile & desktop) */}
-      <div className="fixed bottom-20 md:bottom-6 right-4 md:right-6 z-40 flex flex-col items-end gap-3 pointer-events-none">
-        {!isDockOpen && (
-          <motion.button
-            initial={{ opacity: 0, scale: 0.5 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.5 }}
-            onClick={() => setIsDockOpen(true)}
-            className="pointer-events-auto relative w-12 h-12 bg-[var(--phantom-surface)] border border-emerald-500/30 shadow-2xl rounded-full flex items-center justify-center hover:border-emerald-500 transition-colors cursor-pointer"
-            title="View active sessions"
-          >
-            <Activity className="w-5 h-5 text-emerald-400" />
-            <div className="absolute -top-1 -right-1 bg-emerald-500 text-white text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center shadow-lg">
-              {activeSessions.length}
-            </div>
-          </motion.button>
-        )}
-      </div>
+      {/* Floating Trigger Button (mobile & desktop) - Hidden on chat to prevent overlapping Send button */}
+      {!isChat && (
+        <div className="fixed bottom-20 md:bottom-6 right-4 md:right-6 z-40 flex flex-col items-end gap-3 pointer-events-none">
+          {!isDockOpen && (
+            <motion.button
+              initial={{ opacity: 0, scale: 0.5 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.5 }}
+              onClick={() => setIsDockOpen(true)}
+              className="pointer-events-auto relative w-12 h-12 bg-[var(--phantom-surface)] border border-emerald-500/30 shadow-2xl rounded-full flex items-center justify-center hover:border-emerald-500 transition-colors cursor-pointer"
+              title="View active sessions"
+            >
+              <Activity className="w-5 h-5 text-emerald-400" />
+              <div className="absolute -top-1 -right-1 bg-emerald-500 text-white text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center shadow-lg">
+                {activeSessions.length}
+              </div>
+            </motion.button>
+          )}
+        </div>
+      )}
 
       {/* Universal Active Sessions Drawer / Modal */}
       <AnimatePresence>

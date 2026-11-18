@@ -11,7 +11,6 @@ import Footer from '@/components/layout/Footer';
 import AnimatedBackground from '@/components/layout/AnimatedBackground';
 import ExpiryControl from '@/components/ui/ExpiryControl';
 import SpotlightCard from '@/components/ui/SpotlightCard';
-import CountdownTimer from '@/components/ui/CountdownTimer';
 import AccessLimitScreen from '@/components/ui/AccessLimitScreen';
 import QRCode from 'qrcode';
 import { 
@@ -27,8 +26,6 @@ import {
   Share2, 
   ArrowDown,
   QrCode as QrCodeIcon,
-  ShieldAlert,
-  Clock,
   RotateCcw
 } from 'lucide-react';
 import { toast } from 'sonner';

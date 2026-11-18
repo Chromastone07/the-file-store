@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Users, ShieldAlert, ArrowLeft, RefreshCw, PlusCircle, Home, Flame } from "lucide-react";
+import { Users, ShieldAlert, RefreshCw, PlusCircle, Home, Flame } from "lucide-react";
 import SpotlightCard from "@/components/ui/SpotlightCard";
 import Link from "next/link";
 

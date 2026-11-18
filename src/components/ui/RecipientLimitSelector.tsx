@@ -53,14 +53,14 @@ export default function RecipientLimitSelector({
       <div className="flex items-center justify-between text-xs text-[var(--wisp-muted)] font-medium">
         <span className="flex items-center gap-1.5">
           <Users className="w-3.5 h-3.5 text-indigo-400" />
-          <span>Recipient Limit (Scans Allowed)</span>
+          <span>Recipient Limit</span>
         </span>
         <span className="font-mono text-[11px] text-[var(--wisp-text)]">
           {value === null 
-            ? "Unlimited recipients" 
+            ? "Unlimited" 
             : value === 1 
-              ? "1 recipient (Burn on view)" 
-              : `${value} recipients max`}
+              ? "1 (Burn on view)" 
+              : `${value} max`}
         </span>
       </div>
 
@@ -72,7 +72,7 @@ export default function RecipientLimitSelector({
               key={preset.label}
               type="button"
               onClick={() => handlePresetSelect(preset.val)}
-              className={`py-1.5 px-1 rounded-xl text-xs font-mono font-medium border transition-all flex flex-col items-center justify-center cursor-pointer ${
+              className={`py-1.5 px-1 rounded-xl text-xs font-mono font-medium border transition-all flex items-center justify-center cursor-pointer ${
                 isSelected
                   ? "bg-gradient-to-r from-indigo-500 to-violet-600 text-white border-indigo-400/50 shadow-[0_0_15px_rgba(99,102,241,0.35)] scale-[1.02]"
                   : "bg-[var(--wisp-surface-glass)] border-[var(--wisp-border)] text-[var(--wisp-muted)] hover:text-[var(--wisp-text)] hover:bg-[var(--wisp-elevated)]"
@@ -90,9 +90,6 @@ export default function RecipientLimitSelector({
                   preset.label
                 )}
               </span>
-              <span className="text-[9px] opacity-75 font-sans leading-none mt-0.5 hidden sm:block">
-                {preset.sub}
-              </span>
             </button>
           );
         })}
@@ -100,16 +97,13 @@ export default function RecipientLimitSelector({
         <button
           type="button"
           onClick={handleCustomToggle}
-          className={`py-1.5 px-1 rounded-xl text-xs font-medium border transition-all flex flex-col items-center justify-center cursor-pointer ${
+          className={`py-1.5 px-1 rounded-xl text-xs font-medium border transition-all flex items-center justify-center cursor-pointer ${
             isCustom
               ? "bg-gradient-to-r from-indigo-500 to-violet-600 text-white border-indigo-400/50 shadow-[0_0_15px_rgba(99,102,241,0.35)] scale-[1.02]"
               : "bg-[var(--wisp-surface-glass)] border-[var(--wisp-border)] text-[var(--wisp-muted)] hover:text-[var(--wisp-text)] hover:bg-[var(--wisp-elevated)]"
           }`}
         >
           <span className="text-[11px] font-bold">Custom</span>
-          <span className="text-[9px] opacity-75 font-sans leading-none mt-0.5 hidden sm:block">
-            Specify
-          </span>
         </button>
       </div>
 
@@ -124,9 +118,6 @@ export default function RecipientLimitSelector({
             className="w-24 bg-[var(--wisp-surface-glass)] border border-[var(--wisp-border)] rounded-lg px-2.5 py-1 text-xs font-mono text-[var(--wisp-text)] focus:outline-none focus:border-indigo-400"
             placeholder="10"
           />
-          <span className="text-[11px] text-[var(--wisp-muted)]">
-            total people / devices permitted to scan and open
-          </span>
         </div>
       )}
     </div>
