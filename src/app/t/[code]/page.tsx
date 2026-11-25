@@ -31,6 +31,10 @@ export default function TextRetrievalPage() {
   const params = useParams();
   const code = Array.isArray(params?.code) ? params.code[0] : params?.code;
   const { activeSessions, addActiveSession, removeActiveSession } = useGlobalSession();
+  const activeSessionsRef = useRef(activeSessions);
+  useEffect(() => {
+    activeSessionsRef.current = activeSessions;
+  }, [activeSessions]);
   
   const [state, setState] = useState<AccessState>('loading');
   const [limitError, setLimitError] = useState<{ type: AccessLimitType; limitNumber?: number } | null>(null);
@@ -85,7 +89,7 @@ export default function TextRetrievalPage() {
       }
 
       // Check if this device is already an admitted viewer
-      const isAlreadyAdmitted = activeSessions.some(s => s.id === rawCode);
+      const isAlreadyAdmitted = activeSessionsRef.current.some(s => s.id === rawCode);
 
       // Recipient Limit Enforcement:
       // If max_views is configured and reached, ONLY new incoming scans/codes are blocked.

@@ -28,7 +28,11 @@ export default function AccessDropPage() {
   const rawParam = params?.code;
   const code = (Array.isArray(rawParam) ? rawParam[0] : rawParam) || '';
   
-  const { activeSessions, addActiveSession, setViewingSessionId } = useGlobalSession();
+  const { activeSessions, addActiveSession, setViewingSessionId, setIsDockOpen } = useGlobalSession();
+  const activeSessionsRef = useRef(activeSessions);
+  useEffect(() => {
+    activeSessionsRef.current = activeSessions;
+  }, [activeSessions]);
   const router = useRouter();
   
   const [state, setState] = useState<AccessState>('loading');
@@ -40,6 +44,8 @@ export default function AccessDropPage() {
   const dbLookupCodeRef = useRef<string>('');
 
   useEffect(() => {
+    let active = true;
+
     const fetchDrop = async () => {
       try {
         const rawCode = code.toUpperCase();
@@ -49,9 +55,11 @@ export default function AccessDropPage() {
         if (!isLegacy) {
           dbLookupCode = await hashString(rawCode);
         }
+        if (!active) return;
         dbLookupCodeRef.current = dbLookupCode;
 
         const { data: dropList } = await getDropsByLookupCode(dbLookupCode);
+        if (!active) return;
         
         if (dropList && dropList.length > 0) {
           const activeDrops = dropList.filter(d => !d.is_destroyed);
@@ -68,7 +76,7 @@ export default function AccessDropPage() {
           const first = activeDrops[0];
           
           // Check if this device is already an admitted viewer
-          const isAlreadyAdmitted = activeSessions.some(s => s.id === rawCode);
+          const isAlreadyAdmitted = activeSessionsRef.current.some(s => s.id === rawCode);
 
           // Recipient Limit Enforcement:
           // If max_views is configured and reached, ONLY new incoming scans/codes are blocked.
@@ -95,6 +103,7 @@ export default function AccessDropPage() {
 
         setState('destroyed');
       } catch (err) {
+        if (!active) return;
         console.error('Fetch drop error:', err);
         setState('error');
         setErrorMsg('Failed to load file details.');
@@ -102,6 +111,9 @@ export default function AccessDropPage() {
     };
 
     if (code) fetchDrop();
+    return () => {
+      active = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code]);
 
@@ -187,7 +199,9 @@ export default function AccessDropPage() {
         let textContent = '';
         const filename = dropData.encrypted_filename || '';
         const category = getFileCategory(filename);
-        if (category === 'code' || category === 'document') {
+        const ext = filename.split('.').pop()?.toLowerCase() || '';
+        const isPlainText = category === 'code' || ['txt', 'text', 'md', 'markdown', 'log', 'csv', 'tsv', 'json', 'xml', 'diff', 'patch'].includes(ext);
+        if (isPlainText) {
           try {
             textContent = new TextDecoder().decode(plaintext);
           } catch {
@@ -232,6 +246,7 @@ export default function AccessDropPage() {
         burnAfterReading: dropList.some(d => d.burn_after_reading),
       });
 
+      setIsDockOpen(false);
       setViewingSessionId(rawCode);
       router.replace('/');
     } catch (err: unknown) {

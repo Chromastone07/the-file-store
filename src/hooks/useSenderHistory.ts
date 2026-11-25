@@ -53,18 +53,17 @@ export function useSenderHistory() {
     setHistory(readStoredHistory());
   }, []);
 
-  const broadcastSync = () => {
+  const broadcastSync = useCallback(() => {
     try {
       if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
         const channel = new BroadcastChannel(SYNC_CHANNEL_NAME);
         channel.postMessage({ type: 'SYNC' });
         channel.close();
       }
-      window.dispatchEvent(new Event('wisp_history_changed'));
     } catch {
       // Ignored if BroadcastChannel unsupported
     }
-  };
+  }, []);
 
   useEffect(() => {
     const frameId = requestAnimationFrame(() => {
@@ -83,99 +82,141 @@ export function useSenderHistory() {
       channel.onmessage = () => loadHistory();
     }
 
-    const handleCustomChange = () => loadHistory();
-
     window.addEventListener('storage', handleStorageChange);
-    window.addEventListener('wisp_history_changed', handleCustomChange);
 
     return () => {
       cancelAnimationFrame(frameId);
       window.removeEventListener('storage', handleStorageChange);
-      window.removeEventListener('wisp_history_changed', handleCustomChange);
       channel?.close();
     };
   }, [loadHistory]);
 
-  const addHistoryItem = (item: SenderHistoryItem) => {
+  const addHistoryItem = useCallback((item: SenderHistoryItem) => {
     setHistory(prev => {
       const filtered = prev.filter(p => p.id !== item.id);
       const next = [{ ...item, viewCount: item.viewCount || 0, downloadCount: item.downloadCount || 0 }, ...filtered];
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // ignore
+      }
       return next;
     });
     broadcastSync();
-  };
+  }, [broadcastSync]);
 
-  const updateItemStats = (id: string, stats: { viewCount?: number; downloadCount?: number; isDestroyed?: boolean; destroyReason?: DestroyReason; lastAccessedAt?: string }) => {
+  const updateItemStats = useCallback((id: string, stats: { viewCount?: number; downloadCount?: number; isDestroyed?: boolean; destroyReason?: DestroyReason; lastAccessedAt?: string }) => {
     setHistory(prev => {
       let changed = false;
       const next = prev.map(p => {
         if (p.id === id || p.dbLookupCode === id) {
-          changed = true;
-          return {
-            ...p,
-            viewCount: stats.viewCount !== undefined ? stats.viewCount : p.viewCount,
-            downloadCount: stats.downloadCount !== undefined ? stats.downloadCount : p.downloadCount,
-            isDestroyed: stats.isDestroyed !== undefined ? stats.isDestroyed : p.isDestroyed,
-            destroyReason: stats.destroyReason !== undefined ? stats.destroyReason : p.destroyReason,
-            destroyedAt: stats.isDestroyed && !p.destroyedAt ? new Date().toISOString() : p.destroyedAt,
-            lastAccessedAt: stats.lastAccessedAt || p.lastAccessedAt,
-          };
+          const nextView = stats.viewCount !== undefined ? stats.viewCount : p.viewCount;
+          const nextDownload = stats.downloadCount !== undefined ? stats.downloadCount : p.downloadCount;
+          const nextDestroyed = stats.isDestroyed !== undefined ? stats.isDestroyed : p.isDestroyed;
+          const nextReason = stats.destroyReason !== undefined ? stats.destroyReason : p.destroyReason;
+          const nextLastAccessed = stats.lastAccessedAt || p.lastAccessedAt;
+
+          if (
+            nextView !== p.viewCount ||
+            nextDownload !== p.downloadCount ||
+            nextDestroyed !== p.isDestroyed ||
+            nextReason !== p.destroyReason ||
+            nextLastAccessed !== p.lastAccessedAt
+          ) {
+            changed = true;
+            return {
+              ...p,
+              viewCount: nextView,
+              downloadCount: nextDownload,
+              isDestroyed: nextDestroyed,
+              destroyReason: nextReason,
+              destroyedAt: nextDestroyed && !p.destroyedAt ? new Date().toISOString() : p.destroyedAt,
+              lastAccessedAt: nextLastAccessed,
+            };
+          }
         }
         return p;
       });
+
       if (changed) {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+        return next;
+      }
+      return prev;
+    });
+  }, []);
+
+  const removeHistoryItem = useCallback((id: string) => {
+    setHistory(prev => {
+      const next = prev.filter(p => p.id !== id);
+      try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+    broadcastSync();
+  }, [broadcastSync]);
+
+  const markAsDestroyed = useCallback((id: string, reason: DestroyReason = 'manual') => {
+    setHistory(prev => {
+      let changed = false;
+      const next = prev.map(p => {
+        if (p.id === id || p.dbLookupCode === id) {
+          if (!p.isDestroyed || (p.destroyReason !== reason && !p.destroyReason)) {
+            changed = true;
+            return {
+              ...p,
+              isDestroyed: true,
+              destroyedAt: p.destroyedAt || new Date().toISOString(),
+              destroyReason: p.destroyReason || reason,
+            };
+          }
+        }
+        return p;
+      });
+
+      if (changed) {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        } catch {
+          // ignore
+        }
         return next;
       }
       return prev;
     });
     broadcastSync();
-  };
+  }, [broadcastSync]);
 
-  const removeHistoryItem = (id: string) => {
-    setHistory(prev => {
-      const next = prev.filter(p => p.id !== id);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      return next;
-    });
-    broadcastSync();
-  };
-
-  const markAsDestroyed = (id: string, reason: DestroyReason = 'manual') => {
-    setHistory(prev => {
-      const next = prev.map(p => {
-        if (p.id === id || p.dbLookupCode === id) {
-          return {
-            ...p,
-            isDestroyed: true,
-            destroyedAt: p.destroyedAt || new Date().toISOString(),
-            destroyReason: p.destroyReason || reason,
-          };
-        }
-        return p;
-      });
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      return next;
-    });
-    broadcastSync();
-  };
-
-  const clearLog = () => {
+  const clearLog = useCallback(() => {
     setHistory(prev => {
       const activeOnly = prev.filter(p => !p.isDestroyed && new Date(p.expiresAt) > new Date());
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(activeOnly));
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(activeOnly));
+      } catch {
+        // ignore
+      }
       return activeOnly;
     });
     broadcastSync();
-  };
+  }, [broadcastSync]);
 
-  const clearHistory = () => {
+  const clearHistory = useCallback(() => {
     setHistory([]);
-    localStorage.removeItem(STORAGE_KEY);
-    localStorage.removeItem(LEGACY_STORAGE_KEY);
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
     broadcastSync();
-  };
+  }, [broadcastSync]);
 
   const activeItems = useMemo(() => {
     const now = new Date();

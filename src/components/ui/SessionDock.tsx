@@ -1,17 +1,69 @@
 "use client";
 
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useGlobalSession, ActiveSession, DecryptedFile } from '@/context/GlobalSessionContext';
-import { Shield, X, MessageSquare, FileText, Activity } from 'lucide-react';
+import { Shield, X, MessageSquare, FileText, Activity, AlertTriangle } from 'lucide-react';
 import { useRouter, usePathname } from 'next/navigation';
 import dynamic from 'next/dynamic';
 
 const FileViewerModal = dynamic(() => import('../viewers/FileViewerModal'), { ssr: false });
 const QRScannerModal = dynamic(() => import('./QRScannerModal'), { ssr: false });
-import { recordView, destroyDrop, getDropByCode, getSecureTextByCode } from '@/lib/supabase';
-import { stealth } from '@/lib/stealth';
+import { recordView, destroyDrop, getDropByCode, getDropsByLookupCode, getSecureTextByCode } from '@/lib/supabase';
+import { hashString } from '@/lib/crypto';
 import { toast } from 'sonner';
+
+interface ViewerErrorBoundaryProps {
+  onClose: () => void;
+  children: React.ReactNode;
+}
+
+interface ViewerErrorBoundaryState {
+  hasError: boolean;
+}
+
+class ViewerErrorBoundary extends React.Component<ViewerErrorBoundaryProps, ViewerErrorBoundaryState> {
+  constructor(props: ViewerErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(): ViewerErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error) {
+    console.error('FileViewerModal render error:', error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
+          <div className="max-w-sm w-full bg-[var(--wisp-surface)] border border-[var(--wisp-border)] rounded-2xl p-6 text-center space-y-4 shadow-2xl">
+            <div className="w-12 h-12 rounded-xl bg-rose-500/15 text-rose-400 flex items-center justify-center mx-auto">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-bold text-[var(--wisp-text)]">Preview Unavailable</h3>
+            <p className="text-xs text-[var(--wisp-muted)]">
+              This file could not be rendered cleanly in the browser preview.
+            </p>
+            <button
+              onClick={() => {
+                this.setState({ hasError: false });
+                this.props.onClose();
+              }}
+              className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold cursor-pointer"
+            >
+              Close Viewer
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export default function SessionDock() {
   const { 
@@ -29,7 +81,10 @@ export default function SessionDock() {
   const pathname = usePathname();
   const isChat = pathname === '/chat' || pathname?.startsWith('/chat');
   
-  const [activeFileIndex, setActiveFileIndex] = useState(0);
+  const [fileIndexState, setFileIndexState] = useState<{ sessionId: string | null; index: number }>({
+    sessionId: null,
+    index: 0,
+  });
 
   // BAR Tracking
   const viewRecordedRef = useRef<Set<string>>(new Set());
@@ -45,26 +100,41 @@ export default function SessionDock() {
       try {
         for (const session of dropSessions) {
           const files = session.files;
-          if (!files) continue;
+          if (!files || files.length === 0) continue;
 
           for (const file of files) {
-            const { data } = await getDropByCode(file.drop.session_code);
-              
-            if (!data || data.is_destroyed || new Date(data.expires_at) < new Date()) {
+            // Skip files already burned locally while the viewer stays open
+            if (pendingDestroyedRef.current.has(file.drop.session_code)) {
+              continue;
+            }
+
+            let isPurged = false;
+            if (!file.drop.storage_path && file.drop.session_code === session.id) {
+              // Restored from IndexedDB: session_code holds rawCode -> check via lookup hash
+              const lookupCode = session.id.length === 6 ? session.id : await hashString(session.id);
+              const { data: list } = await getDropsByLookupCode(lookupCode);
+              const activeDrops = list?.filter(d => !d.is_destroyed && new Date(d.expires_at) >= new Date()) || [];
+              if (activeDrops.length === 0) {
+                isPurged = true;
+              }
+            } else {
+              const { data } = await getDropByCode(file.drop.session_code);
+              if (!data || data.is_destroyed || new Date(data.expires_at) < new Date()) {
+                isPurged = true;
+              }
+            }
+
+            if (isPurged) {
               // Remote panic wipe or destroy triggered!
-              // 1. If currently viewing, close viewer immediately
               if (viewingSessionId === session.id) {
                 setViewingSessionId(null);
               }
-              // 2. Revoke blob URLs and zero memory
               files.forEach(f => {
                 if (f.blobUrl) {
                   URL.revokeObjectURL(f.blobUrl);
                   f.blobUrl = '';
                 }
               });
-              stealth.wipeMemory();
-              // 3. Purge session from dock
               removeActiveSession(session.id);
               toast.error(`Transmission Purged: Session ${session.id} was securely destroyed or panic-wiped.`);
               break;
@@ -74,7 +144,7 @@ export default function SessionDock() {
       } catch {
         // Silent polling failure
       }
-    }, 3000);
+    }, 7000);
 
     return () => clearInterval(pollInterval);
   }, [activeSessions, viewingSessionId, removeActiveSession, setViewingSessionId]);
@@ -89,17 +159,16 @@ export default function SessionDock() {
       for (const session of textSessions) {
         if (session.expiresAt && new Date(session.expiresAt).getTime() <= now) {
           if (viewingSessionId === session.id) setViewingSessionId(null);
-          stealth.wipeMemory();
           removeActiveSession(session.id);
           toast.info(`Text session ${session.id} expired.`);
           continue;
         }
 
         try {
-          const { data } = await getSecureTextByCode(session.id);
+          const lookupCode = session.id.length === 6 ? session.id : await hashString(session.id);
+          const { data } = await getSecureTextByCode(lookupCode);
           if (!data || data.is_destroyed) {
             if (viewingSessionId === session.id) setViewingSessionId(null);
-            stealth.wipeMemory();
             removeActiveSession(session.id);
             toast.error(`Transmission Purged: Text session ${session.id} was wiped remotely.`);
           }
@@ -107,7 +176,7 @@ export default function SessionDock() {
           // Blip
         }
       }
-    }, 3000);
+    }, 7000);
 
     return () => clearInterval(textInterval);
   }, [activeSessions, viewingSessionId, removeActiveSession, setViewingSessionId]);
@@ -115,6 +184,8 @@ export default function SessionDock() {
   const viewingSession = activeSessions.find(s => s.id === viewingSessionId);
   const viewingDropSession = viewingSession && viewingSession.type === 'drop' ? viewingSession : null;
   const viewingTextSession = viewingSession && viewingSession.type === 'text' ? viewingSession : null;
+  const rawIndex = fileIndexState.sessionId === viewingSessionId ? fileIndexState.index : 0;
+  const activeFileIndex = viewingDropSession && rawIndex >= 0 && rawIndex < viewingDropSession.files.length ? rawIndex : 0;
   const currentDropFile: DecryptedFile | undefined = viewingDropSession?.files[activeFileIndex];
 
   // Automatically record view for files when they are actively viewed
@@ -153,6 +224,7 @@ export default function SessionDock() {
           });
           
           if (allDestroyed) {
+            files.forEach(f => pendingDestroyedRef.current.delete(f.drop.session_code));
             toast.info(`Drop session ${session.id} destroyed.`);
             removeActiveSession(session.id);
           }
@@ -172,8 +244,8 @@ export default function SessionDock() {
       router.push('/manage');
       setIsDockOpen(false);
     } else {
+      setFileIndexState({ sessionId: session.id, index: 0 });
       setViewingSessionId(session.id);
-      setActiveFileIndex(0);
       setIsDockOpen(false);
     }
   };
@@ -320,60 +392,76 @@ export default function SessionDock() {
 
       {/* Global Viewer Modal */}
       {viewingSessionId && viewingDropSession && currentDropFile && (
-        <FileViewerModal
-          onClose={() => setViewingSessionId(null)}
-          blobUrl={currentDropFile.blobUrl}
-          textContent={currentDropFile.textContent}
-          filename={currentDropFile.drop.encrypted_filename || 'Unknown File'}
-          dropCode={currentDropFile.drop.session_code}
-          viewOnly={currentDropFile.drop.burn_after_reading}
-          currentIndex={activeFileIndex}
-          totalFiles={viewingDropSession.files.length}
-          onNext={() => {
-            const files = viewingDropSession.files;
-            const nextIdx = (activeFileIndex + 1) % files.length;
-            setActiveFileIndex(nextIdx);
-            const nextFile = files[nextIdx];
-            if (!viewRecordedRef.current.has(nextFile.drop.session_code)) {
-              recordView(nextFile.drop.session_code, nextFile.drop.burn_after_reading);
-              viewRecordedRef.current.add(nextFile.drop.session_code);
-            }
+        <ViewerErrorBoundary
+          key={viewingSessionId}
+          onClose={() => {
+            setViewingSessionId(null);
+            setFileIndexState({ sessionId: null, index: 0 });
           }}
-          onPrev={() => {
-            const files = viewingDropSession.files;
-            const prevIdx = (activeFileIndex - 1 + files.length) % files.length;
-            setActiveFileIndex(prevIdx);
-            const prevFile = files[prevIdx];
-            if (!viewRecordedRef.current.has(prevFile.drop.session_code)) {
-              recordView(prevFile.drop.session_code, prevFile.drop.burn_after_reading);
-              viewRecordedRef.current.add(prevFile.drop.session_code);
-            }
-          }}
-          onMediaEnded={() => {
-            if (currentDropFile.drop.burn_after_reading) {
+        >
+          <FileViewerModal
+            onClose={() => {
               setViewingSessionId(null);
-            }
-          }}
-        />
+              setFileIndexState({ sessionId: null, index: 0 });
+            }}
+            blobUrl={currentDropFile.blobUrl}
+            textContent={currentDropFile.textContent}
+            filename={currentDropFile.drop.encrypted_filename || 'Unknown File'}
+            dropCode={currentDropFile.drop.session_code}
+            viewOnly={currentDropFile.drop.burn_after_reading}
+            currentIndex={activeFileIndex}
+            totalFiles={viewingDropSession.files.length}
+            onNext={() => {
+              const files = viewingDropSession.files;
+              const nextIdx = (activeFileIndex + 1) % files.length;
+              setFileIndexState({ sessionId: viewingSessionId, index: nextIdx });
+              const nextFile = files[nextIdx];
+              if (!viewRecordedRef.current.has(nextFile.drop.session_code)) {
+                recordView(nextFile.drop.session_code, nextFile.drop.burn_after_reading);
+                viewRecordedRef.current.add(nextFile.drop.session_code);
+              }
+            }}
+            onPrev={() => {
+              const files = viewingDropSession.files;
+              const prevIdx = (activeFileIndex - 1 + files.length) % files.length;
+              setFileIndexState({ sessionId: viewingSessionId, index: prevIdx });
+              const prevFile = files[prevIdx];
+              if (!viewRecordedRef.current.has(prevFile.drop.session_code)) {
+                recordView(prevFile.drop.session_code, prevFile.drop.burn_after_reading);
+                viewRecordedRef.current.add(prevFile.drop.session_code);
+              }
+            }}
+            onMediaEnded={() => {
+              if (currentDropFile.drop.burn_after_reading) {
+                setViewingSessionId(null);
+              }
+            }}
+          />
+        </ViewerErrorBoundary>
       )}
 
       {/* Global Text Session Viewer Modal */}
       {viewingSessionId && viewingTextSession && (
-        <FileViewerModal
-          onClose={() => {
-            if (viewingTextSession.burnAfterReading) {
-              removeActiveSession(viewingTextSession.id);
-            }
-            setViewingSessionId(null);
-          }}
-          blobUrl=""
-          textContent={viewingTextSession.text}
-          filename={viewingTextSession.title.endsWith('.txt') ? viewingTextSession.title : `${viewingTextSession.title}.txt`}
-          dropCode={viewingTextSession.id}
-          viewOnly={viewingTextSession.burnAfterReading}
-          currentIndex={0}
-          totalFiles={1}
-        />
+        <ViewerErrorBoundary
+          key={`text-${viewingSessionId}`}
+          onClose={() => setViewingSessionId(null)}
+        >
+          <FileViewerModal
+            onClose={() => {
+              if (viewingTextSession.burnAfterReading) {
+                removeActiveSession(viewingTextSession.id);
+              }
+              setViewingSessionId(null);
+            }}
+            blobUrl=""
+            textContent={viewingTextSession.text}
+            filename={viewingTextSession.title.endsWith('.txt') ? viewingTextSession.title : `${viewingTextSession.title}.txt`}
+            dropCode={viewingTextSession.id}
+            viewOnly={viewingTextSession.burnAfterReading}
+            currentIndex={0}
+            totalFiles={1}
+          />
+        </ViewerErrorBoundary>
       )}
 
       {/* Global In-App QR Code Scanner */}

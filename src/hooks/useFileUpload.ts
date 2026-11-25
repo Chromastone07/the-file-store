@@ -31,6 +31,30 @@ interface UploadOptions {
   stripMetadata: boolean;
 }
 
+/** Automatically retry transient network failures (e.g. mobile 4G/tunnel packet drops) */
+async function withNetworkRetry<T>(fn: () => Promise<T>, retries = 2, delayMs = 600): Promise<T> {
+  let lastError: unknown;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await fn();
+    } catch (err: unknown) {
+      lastError = err;
+      const isTransient = err instanceof Error && (
+        err.message.toLowerCase().includes('fetch') ||
+        err.message.toLowerCase().includes('network') ||
+        err.message.toLowerCase().includes('timeout') ||
+        err.message.toLowerCase().includes('load failed') ||
+        err.name === 'TypeError'
+      );
+      if (!isTransient || i === retries) {
+        throw err;
+      }
+      await new Promise(r => setTimeout(r, delayMs * (i + 1)));
+    }
+  }
+  throw lastError;
+}
+
 const DEFAULT_OPTIONS: UploadOptions = {
   expirySeconds: WISP_CONFIG.DEFAULT_EXPIRY_MINUTES * 60,
   burnAfterReading: false,
@@ -110,10 +134,10 @@ export function useFileUpload(type: 'drop' | 'text' = 'drop') {
         }
 
         const storagePath = `${fileSessionCode}_${Date.now()}`;
-        const { error: uploadError } = await uploadEncryptedFile(storagePath, encryptedData);
+        const { error: uploadError } = await withNetworkRetry(() => uploadEncryptedFile(storagePath, encryptedData));
         if (uploadError) throw uploadError;
 
-        const { error: dbError } = await createDropRecord({
+        const { error: dbError } = await withNetworkRetry(() => createDropRecord({
           session_code: fileSessionCode,
           group_code: files.length > 1 ? groupLookupCode : null,
           storage_path: storagePath,
@@ -126,7 +150,7 @@ export function useFileUpload(type: 'drop' | 'text' = 'drop') {
           burn_after_reading: opts.burnAfterReading,
           max_views: opts.maxViews,
           expires_at: expiresAt,
-        });
+        }));
         
         if (dbError) throw dbError;
       });
@@ -216,7 +240,7 @@ export function useFileUpload(type: 'drop' | 'text' = 'drop') {
       
       const ciphertextBase64 = arrayBufferToBase64(ciphertext);
 
-      const { error: dbError } = await createSecureText({
+      const { error: dbError } = await withNetworkRetry(() => createSecureText({
         session_code: dbLookupCode,
         encrypted_content: ciphertextBase64,
         content_type: contentType,
@@ -226,7 +250,7 @@ export function useFileUpload(type: 'drop' | 'text' = 'drop') {
         burn_after_reading: opts.burnAfterReading,
         max_views: opts.maxViews,
         expires_at: expiresAt,
-      });
+      }));
       if (dbError) throw dbError;
 
       setProgress(100);

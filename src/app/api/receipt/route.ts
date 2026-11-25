@@ -68,14 +68,11 @@ export async function POST(request: Request) {
 
     // 4. Update counts
     let updatedViewCount = item.view_count || 0;
-    let updatedDownloadCount = item.download_count || 0;
 
     if (eventType === 'view') {
       if (isNewReceiverView) {
         updatedViewCount += 1;
       }
-    } else if (eventType === 'download') {
-      updatedDownloadCount += 1;
     }
 
     // 5. Evaluate burn-after-reading (ONLY single-use burn burns/destroys the record)
@@ -84,14 +81,10 @@ export async function POST(request: Request) {
 
     const updatePayload: Record<string, unknown> = {
       view_count: updatedViewCount,
-      download_count: updatedDownloadCount,
-      last_accessed_at: nowIso,
     };
 
     if (shouldBurn) {
       updatePayload.is_destroyed = true;
-      updatePayload.state = 'destroyed';
-      updatePayload.destroy_reason = 'burn';
     }
 
     const { error: updateError } = await supabase
@@ -100,14 +93,7 @@ export async function POST(request: Request) {
       .eq('session_code', code);
 
     if (updateError) {
-      console.warn('Failed to update receipt status with full payload, trying standard fields:', updateError.message);
-      const fallbackPayload: Record<string, unknown> = {
-        view_count: updatedViewCount,
-      };
-      if (shouldBurn) {
-        fallbackPayload.is_destroyed = true;
-      }
-      await supabase.from(table).update(fallbackPayload).eq('session_code', code);
+      console.warn('Failed to update receipt status:', updateError.message);
     }
 
     // 6. If burned, delete storage blob
@@ -132,7 +118,6 @@ export async function POST(request: Request) {
       success: true,
       isDestroyed: shouldBurn,
       viewCount: updatedViewCount,
-      downloadCount: updatedDownloadCount,
     });
   } catch (error: unknown) {
     console.error('Receipt confirmation error:', error);

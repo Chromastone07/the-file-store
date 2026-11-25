@@ -198,14 +198,14 @@ export default function ChatPage() {
     };
 
     autoJoin();
-  }, [effectiveChatId, participantToken, activeSessions, connectToChat]);
+  }, [effectiveChatId, participantToken, activeSessions, connectToChat, addHistoryItem]);
 
   // Generate QR code when in active room
   useEffect(() => {
     if (!activeChatSession) return;
     const url = `${window.location.origin}/chat?join=${activeChatSession.config.sessionCode}`;
     QRCode.toDataURL(url, {
-      color: { dark: '#f8fafc', light: '#090a10' },
+      color: { dark: '#090a10', light: '#ffffff' },
       margin: 2,
       width: 140,
     }).then(setQrUrl).catch(console.error);

@@ -126,7 +126,7 @@ export default function DropPage() {
         const qrUrl = await QRCode.toDataURL(uploadResult.shareLink, { 
           width: 200, 
           margin: 2, 
-          color: { dark: '#f8fafc', light: '#090a10' } 
+          color: { dark: '#090a10', light: '#ffffff' } 
         });
         setQrDataUrl(qrUrl);
         toast.success('Files encrypted and ready to share');
@@ -229,11 +229,11 @@ export default function DropPage() {
       <AnimatedBackground />
       <Navbar />
 
-      <main className="flex-1 min-h-0 flex flex-col justify-start sm:justify-center px-4 sm:px-6 pt-2 mobile-bottom-clearance overflow-y-auto wisp-scrollbar z-10">
+      <main className="flex-1 min-h-0 flex flex-col justify-start sm:justify-center px-3 sm:px-6 pt-2 pb-20 sm:pb-6 overflow-y-auto wisp-scrollbar z-10">
         <motion.div 
           initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
-          className="w-full max-w-2xl mx-auto flex flex-col my-auto"
+          className="w-full max-w-2xl mx-auto flex flex-col my-0 sm:my-auto py-1 sm:py-0"
         >
           {/* Header Title */}
           <div className="text-center mb-2.5 sm:mb-4">

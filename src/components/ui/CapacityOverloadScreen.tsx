@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { motion } from "framer-motion";
-import { ServerCrash, RefreshCw, Activity, ArrowLeft, ShieldAlert } from "lucide-react";
+import { ServerCrash, RefreshCw, Activity, ArrowLeft, ShieldAlert, WifiOff } from "lucide-react";
 import SpotlightCard from "@/components/ui/SpotlightCard";
 
 interface CapacityOverloadScreenProps {
@@ -68,6 +68,14 @@ export default function CapacityOverloadScreen({
 
   const actionSubject = mode === "drop" ? "file drop" : mode === "text" ? "secure text" : "session";
 
+  const isNetworkError = !!(
+    errorMessage?.toLowerCase().includes("fetch") ||
+    errorMessage?.toLowerCase().includes("network") ||
+    errorMessage?.toLowerCase().includes("connection") ||
+    errorMessage?.toLowerCase().includes("offline") ||
+    errorMessage?.toLowerCase().includes("load failed")
+  );
+
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.96 }}
@@ -77,39 +85,46 @@ export default function CapacityOverloadScreen({
       className="w-full max-w-xl mx-auto"
     >
       <SpotlightCard className="p-6 sm:p-8 rounded-2xl border border-amber-500/30 bg-[var(--wisp-surface)]/90 backdrop-blur-xl shadow-[0_0_45px_rgba(245,158,11,0.12)] text-center">
-        {/* Amber Protocol Badge */}
+        {/* Status Protocol Badge */}
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-[11px] font-mono text-amber-400 mb-5">
           <span className="relative flex h-2 w-2">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
             <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-400" />
           </span>
           <span className="tracking-wider uppercase font-semibold">
-            Vault Capacity Limit // Queue Saturated
+            {isNetworkError
+              ? "Connection Interrupted // Auto-Reconnecting"
+              : "Vault Capacity Limit // Queue Saturated"}
           </span>
         </div>
 
-        {/* Animated Server Warning Graphic */}
+        {/* Animated Warning Graphic */}
         <div className="relative mb-5 flex justify-center">
           <div className="relative w-20 h-20 rounded-2xl bg-gradient-to-b from-amber-500/20 via-amber-950/20 to-black/40 border border-amber-500/30 flex items-center justify-center shadow-[0_0_30px_rgba(245,158,11,0.2)]">
-            <ServerCrash className="w-10 h-10 text-amber-400 animate-pulse" />
+            {isNetworkError ? (
+              <WifiOff className="w-10 h-10 text-amber-400 animate-pulse" />
+            ) : (
+              <ServerCrash className="w-10 h-10 text-amber-400 animate-pulse" />
+            )}
           </div>
         </div>
 
-        {/* Headline in Outfit */}
+        {/* Headline */}
         <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-[var(--wisp-text)] mb-2.5">
-          Vaults Temporarily at Peak Capacity
+          {isNetworkError ? "Connection Temporarily Interrupted" : "Vaults Temporarily at Peak Capacity"}
         </h2>
 
         {/* Clear Explanation */}
         <p className="text-xs sm:text-sm text-[var(--wisp-muted)] leading-relaxed max-w-md mx-auto mb-5">
-          Due to an exceptional surge in traffic, our encrypted database connections and storage buffers are currently saturated. 
-          To protect your privacy and ensure your {actionSubject} is not corrupted or lost, new uploads are temporarily queued.
+          {isNetworkError
+            ? `Could not reach the encrypted vault service over your current connection. Your local data remains safely encrypted on your device. We will automatically re-attempt the transmission shortly.`
+            : `Due to an exceptional surge in traffic, our encrypted database connections and storage buffers are currently saturated. To protect your privacy and ensure your ${actionSubject} is not corrupted or lost, new uploads are temporarily queued.`}
         </p>
 
         {/* Countdown Shimmer Box */}
         <div className="bg-[var(--wisp-surface-glass)] border border-amber-500/20 rounded-xl p-3.5 mb-5 flex flex-col gap-2">
           <div className="flex items-center justify-between text-xs text-[var(--wisp-muted)] font-mono">
-            <span>Auto-probing vault capacity...</span>
+            <span>{isNetworkError ? "Auto-retrying connection..." : "Auto-probing vault capacity..."}</span>
             <span className="text-amber-400 font-bold font-mono">
               {secondsLeft > 0 ? `${secondsLeft}s` : "Testing now..."}
             </span>
@@ -148,7 +163,7 @@ export default function CapacityOverloadScreen({
         {/* Error Detail (if provided) */}
         {errorMessage && (
           <div className="mb-5 p-2 rounded-lg bg-black/40 border border-white/5 text-[11px] font-mono text-[var(--wisp-muted)]/70 truncate max-w-sm mx-auto">
-            Code: {errorMessage}
+            {isNetworkError ? "Network Status: Reconnecting to server" : `Code: ${errorMessage}`}
           </div>
         )}
 

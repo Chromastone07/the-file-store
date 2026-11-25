@@ -269,18 +269,23 @@ export function GlobalSessionProvider({ children }: { children: React.ReactNode 
   // Sync active sessions to sessionStorage and persistent metadata backup
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    try {
-      const serializable = activeSessions.map(s => {
-        if (s.type === 'drop') {
-          return {
-            ...s,
-            files: s.files ? s.files.map(f => ({ ...f, blobUrl: '' })) : []
-          };
-        }
-        return s;
-      });
-      sessionStorage.setItem('phantom_active_sessions', JSON.stringify(serializable));
+    const serializable = activeSessions.map(s => {
+      if (s.type === 'drop') {
+        return {
+          ...s,
+          files: s.files ? s.files.map(f => ({ ...f, blobUrl: '', textContent: '' })) : []
+        };
+      }
+      return s;
+    });
 
+    try {
+      sessionStorage.setItem('phantom_active_sessions', JSON.stringify(serializable));
+    } catch {
+      // sessionStorage quota exceeded
+    }
+
+    try {
       // Save non-burn-after-reading metadata to localStorage for mobile app restarts
       const persistentMeta = serializable.filter(s => {
         if (s.type === 'drop' && s.burnAfterReading) return false;
@@ -289,7 +294,7 @@ export function GlobalSessionProvider({ children }: { children: React.ReactNode 
       });
       localStorage.setItem('phantom_active_sessions_meta', JSON.stringify(persistentMeta));
     } catch {
-      // Storage quota or error
+      // localStorage quota exceeded
     }
   }, [activeSessions]);
 
@@ -449,7 +454,7 @@ export function GlobalSessionProvider({ children }: { children: React.ReactNode 
       });
 
     channelsRef.current[id] = newChannel;
-  }, [removeActiveSession]);
+  }, []);
 
   const sendChatMessage = useCallback(async (
     sessionId: string, 

@@ -14,12 +14,16 @@ const outfit = Outfit({
   subsets: ['latin'],
   display: 'swap',
   variable: '--font-outfit',
+  fallback: ['system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
+  adjustFontFallback: false,
 });
 
 const jetbrainsMono = JetBrains_Mono({
   subsets: ['latin'],
   display: 'swap',
   variable: '--font-mono',
+  fallback: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
+  adjustFontFallback: false,
 });
 
 export const viewport: Viewport = {
@@ -94,9 +98,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             position="bottom-center"
             offset="76px"
             visibleToasts={1}
-            duration={2200}
+            duration={2600}
             closeButton={false}
-            theme="light"
           />
         </GlobalSessionProvider>
       </body>

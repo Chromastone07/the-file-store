@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   FileText, 
@@ -53,14 +53,20 @@ export default function ManagePage() {
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [destroyConfirmId, setDestroyConfirmId] = useState<string | null>(null);
 
+  const activeItemsRef = useRef(activeItems);
+  useEffect(() => {
+    activeItemsRef.current = activeItems;
+  }, [activeItems]);
+
   // Poll Supabase for live view & download counts and purge status
   const fetchStatuses = useCallback(async () => {
-    if (activeItems.length === 0) return;
+    const items = activeItemsRef.current;
+    if (!items || items.length === 0) return;
     setIsRefreshing(true);
 
     try {
       await Promise.all(
-        activeItems.map(async (item) => {
+        items.map(async (item) => {
           if (item.type === 'drop') {
             const { data: drops } = await getDropsByLookupCode(item.dbLookupCode);
             if (drops && drops.length > 0) {
@@ -106,7 +112,7 @@ export default function ManagePage() {
     } finally {
       setIsRefreshing(false);
     }
-  }, [activeItems, markAsDestroyed, updateItemStats]);
+  }, [markAsDestroyed, updateItemStats]);
 
   useEffect(() => {
     if (!isLoaded) return;
@@ -151,7 +157,7 @@ export default function ManagePage() {
       const data = await QRCode.toDataURL(url, {
         width: 220,
         margin: 2,
-        color: { dark: '#f8fafc', light: '#090a10' },
+        color: { dark: '#090a10', light: '#ffffff' },
       });
       setQrDataUrl(data);
       setQrModalItem({ code: item.rawCode, url });
