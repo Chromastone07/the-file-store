@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { WISP_CONFIG } from '@/lib/config';
+import { checkRateLimit, getClientIp } from '@/lib/rateLimit';
+import { isSafeCode } from '@/lib/security';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,16 +12,36 @@ function getSupabaseClient() {
   return createClient(url, serviceKey);
 }
 
-// In-memory receiver cache for atomic counting when access_events table is initializing
+// Bounded in-memory receiver cache for atomic counting
+const MAX_VIEW_CACHE_ENTRIES = 10_000;
 const receiverViewCache = new Set<string>();
 
 export async function POST(request: Request) {
-  try {
-    const body = await request.json();
-    const { code, type, eventType, receiverToken } = body;
+  const clientIp = getClientIp(request);
+  const rl = checkRateLimit(`receipt_${clientIp}`, { limit: 120, windowMs: 60_000 });
+  if (!rl.success) {
+    return NextResponse.json(
+      { error: 'Too many requests' },
+      { status: 429, headers: { 'Retry-After': String(rl.retryAfter) } }
+    );
+  }
 
-    if (!code || !type || !eventType || !receiverToken) {
-      return NextResponse.json({ error: 'Missing required parameters' }, { status: 400 });
+  try {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+    }
+
+    const { code, type, eventType, receiverToken } = (body || {}) as Record<string, unknown>;
+
+    if (!isSafeCode(code) || !isSafeCode(receiverToken)) {
+      return NextResponse.json({ error: 'Invalid parameters' }, { status: 400 });
+    }
+
+    if (type !== 'drop' && type !== 'text') {
+      return NextResponse.json({ error: 'Invalid item type' }, { status: 400 });
     }
 
     if (eventType !== 'view' && eventType !== 'download') {
@@ -45,13 +67,12 @@ export async function POST(request: Request) {
 
     // 2. Check if expired
     if (new Date(item.expires_at) < now || item.is_destroyed) {
-      // Mark destroyed if not already
       if (!item.is_destroyed) {
         await supabase
           .from(table)
-          .update({ is_destroyed: true, state: 'destroyed', destroy_reason: 'ttl' })
+          .update({ is_destroyed: true })
           .eq('session_code', code);
-        
+
         if (type === 'drop' && item.storage_path) {
           await supabase.storage.from(WISP_CONFIG.STORAGE_BUCKET).remove([item.storage_path]);
         }
@@ -59,10 +80,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Item has expired', isDestroyed: true }, { status: 410 });
     }
 
-    // 3. Unique receiver check for view
+    // 3. Unique receiver check for view (bounded cache to prevent memory exhaustion)
     const cacheKey = `${code}_${receiverToken}_${eventType}`;
     const isNewReceiverView = eventType === 'view' && !receiverViewCache.has(cacheKey);
     if (isNewReceiverView) {
+      if (receiverViewCache.size >= MAX_VIEW_CACHE_ENTRIES) {
+        const oldestKey = receiverViewCache.values().next().value;
+        if (oldestKey !== undefined) receiverViewCache.delete(oldestKey);
+      }
       receiverViewCache.add(cacheKey);
     }
 

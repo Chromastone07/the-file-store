@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { motion } from 'framer-motion';
 import { decryptData, decryptWithPassword, hashString, importKeyFromBase64 } from '@/lib/crypto';
 import { getDropsByLookupCode, getSignedDownloadUrl, recordView } from '@/lib/supabase';
 import type { DropRecord } from '@/lib/supabase';
@@ -10,12 +9,25 @@ import { getFileCategory, extractKeyFromFragment } from '@/lib/utils';
 import Navbar from '@/components/layout/Navbar';
 import AnimatedBackground from '@/components/layout/AnimatedBackground';
 import AccessLimitScreen, { AccessLimitType } from '@/components/ui/AccessLimitScreen';
+import VaultErrorScreen from '@/components/ui/VaultErrorScreen';
+import SpotlightCard from '@/components/ui/SpotlightCard';
 import { useGlobalSession } from '@/context/GlobalSessionContext';
 import { stealth } from '@/lib/stealth';
 import { sessionCache } from '@/lib/sessionCache';
 import { toast } from 'sonner';
+import { Eye, EyeOff, Lock, KeyRound } from 'lucide-react';
 
-type AccessState = 'loading' | 'password-required' | 'key-required' | 'decrypting' | 'destroyed' | 'error' | 'expired';
+type AccessState =
+  | 'loading'
+  | 'password-required'
+  | 'wrong-password'
+  | 'key-required'
+  | 'decrypting'
+  | 'not-found'
+  | 'invalid-code'
+  | 'destroyed'
+  | 'error'
+  | 'expired';
 
 interface DecryptedFile {
   drop: DropRecord;
@@ -39,16 +51,24 @@ export default function AccessDropPage() {
   const [drops, setDrops] = useState<DropRecord[]>([]);
   const [limitError, setLimitError] = useState<{ type: AccessLimitType; limitNumber?: number } | null>(null);
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [failedAttempts, setFailedAttempts] = useState(0);
   const [manualKey, setManualKey] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const dbLookupCodeRef = useRef<string>('');
+  const hasConsumedRef = useRef(false);
 
   useEffect(() => {
     let active = true;
 
     const fetchDrop = async () => {
       try {
-        const rawCode = code.toUpperCase();
+        const rawCode = code.trim().toUpperCase();
+        if (!/^[A-Z0-9]{6}$|^[A-Z0-9]{8}$/.test(rawCode)) {
+          setState('invalid-code');
+          return;
+        }
+
         const isLegacy = rawCode.length === 6;
         let dbLookupCode = rawCode;
 
@@ -58,8 +78,14 @@ export default function AccessDropPage() {
         if (!active) return;
         dbLookupCodeRef.current = dbLookupCode;
 
-        const { data: dropList } = await getDropsByLookupCode(dbLookupCode);
+        const { data: dropList, error: fetchError } = await getDropsByLookupCode(dbLookupCode);
         if (!active) return;
+
+        if (fetchError) {
+          setErrorMsg(fetchError.message || 'Could not reach the vault server.');
+          setState('error');
+          return;
+        }
         
         if (dropList && dropList.length > 0) {
           const activeDrops = dropList.filter(d => !d.is_destroyed);
@@ -75,8 +101,8 @@ export default function AccessDropPage() {
 
           const first = activeDrops[0];
           
-          // Check if this device is already an admitted viewer
-          const isAlreadyAdmitted = activeSessionsRef.current.some(s => s.id === rawCode);
+          // Check if this device is already an admitted receiver viewer
+          const isAlreadyAdmitted = activeSessionsRef.current.some(s => s.type === 'drop' && s.id === rawCode);
 
           // Recipient Limit Enforcement:
           // If max_views is configured and reached, ONLY new incoming scans/codes are blocked.
@@ -101,7 +127,7 @@ export default function AccessDropPage() {
           return;
         }
 
-        setState('destroyed');
+        setState('not-found');
       } catch (err) {
         if (!active) return;
         console.error('Fetch drop error:', err);
@@ -120,14 +146,29 @@ export default function AccessDropPage() {
   // Real-time polling to detect remote panic wipe or destroy while viewing
   useEffect(() => {
     const currentCode = dbLookupCodeRef.current;
-    if (!currentCode || limitError || state === 'destroyed' || state === 'loading') return;
+    if (
+      !currentCode ||
+      limitError ||
+      state === 'destroyed' ||
+      state === 'expired' ||
+      state === 'not-found' ||
+      state === 'invalid-code' ||
+      state === 'error' ||
+      state === 'loading'
+    ) {
+      return;
+    }
 
     const interval = setInterval(async () => {
       try {
         const { data: dropList } = await getDropsByLookupCode(currentCode);
         if (!dropList || dropList.length === 0 || dropList.every(d => d.is_destroyed)) {
-          stealth.wipeMemory();
           const first = dropList?.[0];
+          if (hasConsumedRef.current && first?.destroy_reason !== 'panic') {
+            clearInterval(interval);
+            return;
+          }
+          stealth.wipeMemory();
           if (first?.destroy_reason === 'panic') {
             setLimitError({ type: 'panic_wiped' });
             toast.error('Transmission Terminated: Sender executed remote panic wipe.');
@@ -147,16 +188,16 @@ export default function AccessDropPage() {
   const handleDecryption = async (dropList: DropRecord[], providedPassword?: string) => {
     setState('decrypting');
     try {
-      const rawCode = code.toUpperCase();
+      const rawCode = code.trim().toUpperCase();
       const isLegacy = rawCode.length === 6;
       
       const results: DecryptedFile[] = [];
 
       for (const dropData of dropList) {
         const signedUrl = await getSignedDownloadUrl(dropData.storage_path);
-        if (!signedUrl) continue;
+        if (!signedUrl) throw new Error('Encrypted file blob could not be located.');
         const response = await fetch(signedUrl);
-        if (!response.ok) continue;
+        if (!response.ok) throw new Error('Failed to download encrypted payload.');
         const ciphertext = await response.arrayBuffer();
 
         let plaintext: ArrayBuffer;
@@ -224,10 +265,17 @@ export default function AccessDropPage() {
             false
           ).catch(console.error);
         }
-
-        // Record the view and trigger burn-after-reading if enabled
-        recordView(dropData.session_code, dropData.burn_after_reading).catch(console.error);
       }
+
+      if (results.length === 0) {
+        throw new Error('No decrypted files could be loaded.');
+      }
+
+      // Mark consumed BEFORE recording view so polling doesn't prematurely kill BAR on slow networks
+      hasConsumedRef.current = true;
+      await Promise.all(
+        results.map((r) => recordView(r.drop.session_code, r.drop.burn_after_reading).catch(console.error))
+      );
 
       let sessionTitle = 'FILE DROP';
       if (results.length > 0) {
@@ -251,11 +299,25 @@ export default function AccessDropPage() {
       router.replace('/');
     } catch (err: unknown) {
       console.error('Decryption error:', err);
+      const isPasswordFailure =
+        Boolean(providedPassword) &&
+        dropList.some((d) => d.has_password) &&
+        err instanceof DOMException &&
+        (err.name === 'OperationError' || err.name === 'DataError');
+
+      if (isPasswordFailure) {
+        setFailedAttempts((n) => n + 1);
+        setPassword('');
+        setState('wrong-password');
+        toast.error('Incorrect password');
+        return;
+      }
+
       setState('error');
       if (err instanceof DOMException && err.name === 'DataError') {
         setErrorMsg('Invalid decryption key. Ensure you copied the full link correctly.');
       } else {
-        const message = err instanceof Error ? err.message : 'Decryption failed. Invalid password or key.';
+        const message = err instanceof Error && err.message ? err.message : 'Decryption failed. Invalid password or key.';
         setErrorMsg(message);
       }
     }
@@ -263,7 +325,9 @@ export default function AccessDropPage() {
 
   const handlePasswordSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (drops.length > 0 && password) handleDecryption(drops, password);
+    if (drops.length > 0 && password) {
+      handleDecryption(drops, password);
+    }
   };
 
   const handleKeySubmit = (e: React.FormEvent) => {
@@ -290,82 +354,137 @@ export default function AccessDropPage() {
 
         {/* Loading / Decrypting */}
         {!limitError && (state === 'loading' || state === 'decrypting') && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="panel w-full max-w-md mx-auto py-12 flex flex-col items-center justify-center">
-            <div className="w-[34px] h-[34px] rounded-full border-2 border-[var(--phantom-border)] border-t-[var(--phantom-glow)] mb-5 animate-spin"></div>
-            <p className="text-[13.5px] text-[var(--phantom-muted)] text-center">
+          <SpotlightCard className="w-full max-w-md mx-auto p-8 sm:p-12 flex flex-col items-center justify-center shadow-2xl border border-[var(--wisp-border)] bg-[var(--wisp-surface)] backdrop-blur-xl">
+            <div className="w-9 h-9 rounded-full border-2 border-[var(--wisp-border)] border-t-indigo-500 mb-5 animate-spin" />
+            <p className="text-sm text-[var(--wisp-muted)] text-center font-medium">
               {state === 'loading' ? 'Locating session...' : 'Decrypting locally...'}
             </p>
-          </motion.div>
+          </SpotlightCard>
         )}
 
+        {/* Password Prompt */}
         {!limitError && state === 'password-required' && (
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md bg-[var(--phantom-surface)] border border-[var(--phantom-border)] rounded-xl p-8">
-            <div className="text-center mb-6">
-              <div className="w-16 h-16 bg-[var(--phantom-elevated)] rounded-full flex items-center justify-center mx-auto mb-4">
-                <svg className="w-8 h-8 text-[var(--phantom-glow)]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+          <div className="w-full max-w-md mx-auto">
+            <SpotlightCard className="p-6 sm:p-8 shadow-2xl border border-[var(--wisp-border)] bg-[var(--wisp-surface)] backdrop-blur-xl">
+              <div className="text-center mb-6">
+                <div className="w-16 h-16 bg-[var(--wisp-elevated)] border border-[var(--wisp-border)] rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-[0_0_24px_rgba(99,102,241,0.18)]">
+                  <Lock className="w-7 h-7 text-indigo-500" />
+                </div>
+                <h2 className="text-xl font-extrabold text-[var(--wisp-text)]">Password Required</h2>
+                <p className="text-[var(--wisp-muted)] text-xs sm:text-sm mt-2">
+                  This drop is protected with an additional password layer.
+                </p>
+                {failedAttempts > 0 && (
+                  <p className="text-[11px] font-mono text-amber-500 mt-2">
+                    Previous attempt failed ({failedAttempts}) — check Caps Lock
+                  </p>
+                )}
               </div>
-              <h2 className="text-xl font-bold">Password Required</h2>
-              <p className="text-[var(--phantom-muted)] text-sm mt-2">This drop is protected with an additional password layer.</p>
-            </div>
-            <form onSubmit={handlePasswordSubmit} className="space-y-4">
-              <input type="password" placeholder="Enter password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full bg-[var(--phantom-elevated)] border border-[var(--phantom-border)] rounded-lg px-4 py-3 focus:outline-none focus:border-[var(--phantom-glow)]" autoFocus />
-              <button type="submit" disabled={!password} className="w-full bg-[var(--phantom-glow)] hover:bg-[var(--phantom-accent)] text-white font-medium py-3 rounded-lg transition-colors disabled:opacity-50">Decrypt</button>
-            </form>
-          </motion.div>
+              <form onSubmit={handlePasswordSubmit} className="space-y-4">
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="Enter unlock password..."
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full bg-[var(--wisp-elevated)] border border-[var(--wisp-border)] focus:border-indigo-500 rounded-xl px-4 py-3 pr-11 focus:outline-none text-sm text-[var(--wisp-text)] placeholder:text-[var(--wisp-muted)]/60"
+                    autoFocus
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(v => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-[var(--wisp-muted)] hover:text-[var(--wisp-text)] cursor-pointer"
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    title={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <button
+                  type="submit"
+                  disabled={!password}
+                  className="w-full bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-600 hover:to-violet-700 text-white font-semibold py-3 rounded-xl transition-all disabled:opacity-40 cursor-pointer shadow-lg shadow-indigo-500/20 text-sm"
+                >
+                  Decrypt File
+                </button>
+              </form>
+            </SpotlightCard>
+          </div>
         )}
 
+        {/* Incorrect Password Error Screen */}
+        {!limitError && state === 'wrong-password' && (
+          <VaultErrorScreen
+            variant="wrong_password"
+            resourceType="drop"
+            code={code}
+            attempts={failedAttempts}
+            onRetryPassword={() => {
+              setPassword('');
+              setState('password-required');
+            }}
+          />
+        )}
+
+        {/* Missing Decryption Key (Legacy 6-char) */}
         {!limitError && state === 'key-required' && (
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md bg-[var(--phantom-surface)] border border-[var(--phantom-border)] rounded-xl p-8">
-            <div className="text-center mb-6">
-              <div className="w-16 h-16 bg-[var(--phantom-elevated)] rounded-full flex items-center justify-center mx-auto mb-4">
-                <svg className="w-8 h-8 text-[var(--phantom-warning)]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4v-3.286l5.964-5.964A6 6 0 1121 9z" /></svg>
+          <div className="w-full max-w-md mx-auto">
+            <SpotlightCard className="p-6 sm:p-8 shadow-2xl border border-[var(--wisp-border)] bg-[var(--wisp-surface)] backdrop-blur-xl">
+              <div className="text-center mb-6">
+                <div className="w-16 h-16 bg-[var(--wisp-elevated)] border border-[var(--wisp-border)] rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-[0_0_24px_rgba(245,158,11,0.18)]">
+                  <KeyRound className="w-7 h-7 text-amber-500" />
+                </div>
+                <h2 className="text-xl font-extrabold text-[var(--wisp-text)]">Decryption Key Missing</h2>
+                <p className="text-[var(--wisp-muted)] text-xs sm:text-sm mt-2">
+                  Paste the decryption key or full share link manually.
+                </p>
               </div>
-              <h2 className="text-xl font-bold">Decryption Key Missing</h2>
-              <p className="text-[var(--phantom-muted)] text-sm mt-2">Paste the decryption key or full link manually.</p>
-            </div>
-            <form onSubmit={handleKeySubmit} className="space-y-4">
-              <input type="text" placeholder="Paste decryption key or full link..." value={manualKey} onChange={(e) => setManualKey(e.target.value)} className="w-full bg-[var(--phantom-elevated)] border border-[var(--phantom-border)] rounded-lg px-4 py-3 focus:outline-none focus:border-[var(--phantom-glow)] font-mono text-sm" autoFocus />
-              <button type="submit" disabled={!manualKey} className="w-full bg-[var(--phantom-glow)] hover:bg-[var(--phantom-accent)] text-white font-medium py-3 rounded-lg transition-colors disabled:opacity-50">Decrypt</button>
-            </form>
-          </motion.div>
+              <form onSubmit={handleKeySubmit} className="space-y-4">
+                <input
+                  type="text"
+                  placeholder="Paste decryption key or full link..."
+                  value={manualKey}
+                  onChange={(e) => setManualKey(e.target.value)}
+                  className="w-full bg-[var(--wisp-elevated)] border border-[var(--wisp-border)] focus:border-indigo-500 rounded-xl px-4 py-3 focus:outline-none font-mono text-sm text-[var(--wisp-text)]"
+                  autoFocus
+                />
+                <button
+                  type="submit"
+                  disabled={!manualKey}
+                  className="w-full bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-600 hover:to-violet-700 text-white font-semibold py-3 rounded-xl transition-all disabled:opacity-40 cursor-pointer text-sm"
+                >
+                  Decrypt
+                </button>
+              </form>
+            </SpotlightCard>
+          </div>
         )}
 
-        {/* Expired / Destroyed */}
-        {!limitError && (state === 'destroyed' || state === 'expired') && (
-          <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="panel w-full max-w-md mx-auto text-center py-8">
-            <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-5 bg-[var(--phantom-elevated)] border ${state === 'destroyed' ? 'border-[var(--phantom-muted)]/30' : 'border-[var(--phantom-danger)]/30'}`}>
-              {state === 'destroyed' ? (
-                <svg className="w-[26px] h-[26px] text-[var(--phantom-muted)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/><path d="M4 4l16 16"/></svg>
-              ) : (
-                <svg className="w-[26px] h-[26px] text-[var(--phantom-danger)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
-              )}
-            </div>
-            <h3 className="font-display text-[20px] font-semibold mb-2 text-[var(--phantom-text)]">
-              {state === 'destroyed' ? 'Already opened and destroyed' : 'This session has expired'}
-            </h3>
-            <p className="text-[13.5px] text-[var(--phantom-muted)] max-w-[340px] mx-auto mb-6">
-              {state === 'destroyed' 
-                ? "This was a one-time link and it&apos;s already been used. If you were expecting this file, ask the sender for a new session." 
-                : "The sender&apos;s timer ran out before this link was opened. Nothing was ever stored longer than that window."}
-            </p>
-            <button onClick={() => router.push('/')} className="inline-block bg-transparent hover:bg-[var(--phantom-glow)]/10 text-[var(--phantom-text)] border border-[var(--phantom-border)] hover:border-[var(--phantom-glow)]/30 font-medium px-5 py-2.5 rounded-full transition-colors text-[13.5px]">
-              Send a new file instead
-            </button>
-          </motion.div>
+        {/* Does Not Exist / Invalid Code / Destroyed / Expired / Network Error */}
+        {!limitError && (state === 'not-found' || state === 'invalid-code' || state === 'destroyed' || state === 'expired') && (
+          <VaultErrorScreen
+            variant={
+              state === 'not-found'
+                ? 'not_found'
+                : state === 'invalid-code'
+                  ? 'invalid_code'
+                  : state === 'destroyed'
+                    ? 'destroyed'
+                    : 'expired'
+            }
+            resourceType="drop"
+            code={code}
+          />
         )}
 
-        {/* Error */}
-        {state === 'error' && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="panel w-full max-w-md mx-auto text-center py-8">
-            <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-5 bg-[var(--phantom-elevated)] border border-[var(--phantom-danger)]/30">
-              <svg className="w-[26px] h-[26px] text-[var(--phantom-danger)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M12 9v4M12 17h.01M10.3 3.9L2.7 18a2 2 0 0 0 1.8 3h15a2 2 0 0 0 1.8-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
-            </div>
-            <h3 className="font-display text-[20px] font-semibold mb-2 text-[var(--phantom-text)]">Couldn&apos;t reach the session</h3>
-            <p className="text-[13.5px] text-[var(--phantom-muted)] max-w-[340px] mx-auto mb-6">{errorMsg || 'The network dropped mid-request.'}</p>
-            <button onClick={() => window.location.reload()} className="inline-block bg-transparent hover:bg-[var(--phantom-glow)]/10 text-[var(--phantom-text)] border border-[var(--phantom-border)] hover:border-[var(--phantom-glow)]/30 font-medium px-5 py-2.5 rounded-full transition-colors text-[13.5px]">
-              Retry now
-            </button>
-          </motion.div>
+        {!limitError && state === 'error' && (
+          <VaultErrorScreen
+            variant="network_error"
+            resourceType="drop"
+            code={code}
+            errorDetail={errorMsg}
+            onRetry={() => window.location.reload()}
+          />
         )}
 
       </main>

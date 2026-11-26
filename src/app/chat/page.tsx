@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { useGlobalSession, ActiveSession, ChatMessage } from '@/context/GlobalSessionContext';
-import { generateFriendlyAlias } from '@/lib/crypto';
+import { generateFriendlyAlias, generateReceiptToken } from '@/lib/crypto';
 import { WISP_CONFIG } from '@/lib/config';
 import { useSenderHistory } from '@/hooks/useSenderHistory';
 import Navbar from '@/components/layout/Navbar';
@@ -115,8 +115,8 @@ export default function ChatPage() {
     if (typeof window === 'undefined') return;
     const key = WISP_CONFIG.STORAGE_KEYS.CHAT_PARTICIPANT;
     let token = sessionStorage.getItem(key);
-    if (!token) {
-      token = Math.random().toString(36).substring(2, 15);
+    if (!token || token.length < 8) {
+      token = generateReceiptToken();
       sessionStorage.setItem(key, token);
     }
     setParticipantToken(token);
@@ -157,7 +157,13 @@ export default function ChatPage() {
           if (err.error === 'ROOM_FULL') {
             setJoinError({ code: effectiveChatId, type: 'room_full', maxUsers: err.maxUsers });
             toast.error(err.message || 'Chat room is full');
-          } else if (res.status === 404 || err.error === 'ROOM_NOT_FOUND' || res.status === 410 || err.error === 'ROOM_EXPIRED') {
+          } else if (
+            res.status === 404 ||
+            err.error === 'ROOM_NOT_FOUND' ||
+            res.status === 410 ||
+            err.error === 'ROOM_EXPIRED' ||
+            err.error === 'INVALID_CODE'
+          ) {
             setJoinError({ code: effectiveChatId, type: 'room_not_found' });
             toast.error(err.message || 'Chat room not found or expired');
           } else {

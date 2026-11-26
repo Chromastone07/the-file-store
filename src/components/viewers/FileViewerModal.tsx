@@ -1,8 +1,9 @@
 "use client";
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { getFileCategory } from '@/lib/utils';
+import { getFileCategory, getTimeRemaining } from '@/lib/utils';
+import { isSvgFilename } from '@/lib/security';
 import { recordDownload } from '@/lib/supabase';
 import ImageViewer from './ImageViewer';
 import VideoPlayer from './VideoPlayer';
@@ -31,7 +32,9 @@ import {
   Table,
   Archive,
   Presentation,
-  FileQuestion
+  FileQuestion,
+  Clock,
+  Flame
 } from 'lucide-react';
 
 interface FileViewerModalProps {
@@ -40,6 +43,8 @@ interface FileViewerModalProps {
   dropCode?: string;       // session code for tracking downloads
   textContent?: string;    // decoded text for code/document files
   viewOnly?: boolean;      // burn-after-reading mode
+  expiresAt?: string;      // ISO timestamp for automatic expiration
+  onExpired?: () => void;  // called when expiresAt is reached
   onClose: () => void;
   currentIndex?: number;
   totalFiles?: number;
@@ -54,6 +59,8 @@ export default function FileViewerModal({
   dropCode,
   textContent,
   viewOnly = false,
+  expiresAt,
+  onExpired,
   onClose,
   currentIndex,
   totalFiles,
@@ -62,6 +69,27 @@ export default function FileViewerModal({
   onMediaEnded,
 }: FileViewerModalProps) {
   const category = getFileCategory(filename);
+  const [timeLeft, setTimeLeft] = useState(() => (expiresAt ? getTimeRemaining(expiresAt) : null));
+
+  useEffect(() => {
+    if (!expiresAt) return;
+    const initial = getTimeRemaining(expiresAt);
+    if (initial.expired) {
+      const immediate = setTimeout(() => onExpired?.(), 0);
+      return () => clearTimeout(immediate);
+    }
+
+    const interval = setInterval(() => {
+      const remaining = getTimeRemaining(expiresAt);
+      setTimeLeft(remaining);
+      if (remaining.expired) {
+        clearInterval(interval);
+        onExpired?.();
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [expiresAt, onExpired]);
 
   // Close on Escape key, navigate on arrows
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -168,8 +196,25 @@ export default function FileViewerModal({
 
           {/* Right: Actions */}
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            {/* Open in Tab for binary files */}
-            {blobUrl && (category === 'pdf' || category === 'image' || category === 'video') && (
+            {/* Compact BAR + Countdown Indicator */}
+            {timeLeft && !timeLeft.expired && (
+              <div
+                className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[10px] sm:text-xs font-mono font-semibold shrink-0 ${
+                  viewOnly
+                    ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+                    : timeLeft.totalSeconds <= 60
+                      ? 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+                      : 'bg-[var(--wisp-elevated)] border-[var(--wisp-border)] text-[var(--wisp-muted)]'
+                }`}
+                title={viewOnly ? 'Burn after reading: auto-burns on close, tab switch, or expiry' : 'Time until session expires'}
+              >
+                {viewOnly ? <Flame className="w-3 h-3 text-amber-400" /> : <Clock className="w-3 h-3" />}
+                <span>{timeLeft.label}</span>
+              </div>
+            )}
+
+            {/* Open in Tab for non-BAR binary files (exclude SVG to prevent same-origin blob script execution) */}
+            {!viewOnly && blobUrl && !isSvgFilename(filename) && (category === 'pdf' || category === 'image' || category === 'video') && (
               <a
                 href={blobUrl}
                 target="_blank"

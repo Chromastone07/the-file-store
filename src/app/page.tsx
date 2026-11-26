@@ -43,9 +43,9 @@ export default function Home() {
         dbLookupCode = await hashString(trimmed);
       }
 
-      // 2. Check Text Sessions via RPC
+      // 2. Check Text Sessions via RPC (route even if destroyed/expired so accurate text error renders)
       const { data: textData } = await getSecureTextByCode(dbLookupCode);
-      if (textData && !textData.is_destroyed) {
+      if (textData) {
         router.push(`/t/${trimmed}`);
         return;
       }

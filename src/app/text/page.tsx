@@ -24,6 +24,8 @@ import {
   Flame, 
   Lock, 
   KeyRound, 
+  Eye,
+  EyeOff,
   RefreshCw,
   AlertTriangle,
   ArrowRight
@@ -37,6 +39,7 @@ export default function TextPage() {
   const [maxRecipients, setMaxRecipients] = useState<number | null>(null);
   const [addPassword, setAddPassword] = useState(false);
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
 
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
@@ -52,6 +55,7 @@ export default function TextPage() {
   const { uploadText, destructText, isProcessing, result, reset, phase, error } = useFileUpload('text');
   const { history, markAsDestroyed: markHistoryDestroyed } = useSenderHistory();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const passwordInputRef = useRef<HTMLInputElement>(null);
 
   const historyItem = history.find(h => h.id === result?.sessionCode);
   const [localIsDestroyed, setLocalIsDestroyed] = useState(false);
@@ -85,6 +89,12 @@ export default function TextPage() {
   const handleShare = async () => {
     if (!text.trim() || isProcessing) {
       toast.error('Please enter some text to share');
+      return;
+    }
+
+    if (addPassword && !password.trim()) {
+      toast.error('Please enter an unlock password or uncheck Password protect');
+      passwordInputRef.current?.focus();
       return;
     }
 
@@ -138,7 +148,9 @@ export default function TextPage() {
   const handleNewSnippet = () => {
     reset();
     setText('');
+    setAddPassword(false);
     setPassword('');
+    setShowPassword(false);
     setLocalIsDestroyed(false);
     setQrCodeUrl('');
     setCopiedLink(false);
@@ -258,7 +270,14 @@ export default function TextPage() {
                         <input
                           type="checkbox"
                           checked={addPassword}
-                          onChange={(e) => setAddPassword(e.target.checked)}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setAddPassword(checked);
+                            if (!checked) {
+                              setPassword('');
+                              setShowPassword(false);
+                            }
+                          }}
                           className="accent-[var(--wisp-glow)] w-4 h-4 cursor-pointer"
                         />
                       </label>
@@ -266,18 +285,32 @@ export default function TextPage() {
 
                     {addPassword && (
                       <motion.div 
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: 'auto' }}
-                        className="flex items-center gap-2 bg-[var(--wisp-surface-glass)] border border-[var(--wisp-border)] rounded-xl px-3 py-2"
+                        initial={{ opacity: 0, y: -4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className={`flex items-center gap-2 bg-[var(--wisp-surface-glass)] border rounded-xl px-3 py-2 transition-colors ${
+                          !password.trim() ? 'border-indigo-400/60' : 'border-[var(--wisp-border)]'
+                        }`}
                       >
-                        <Lock className="w-4 h-4 text-[var(--wisp-muted)] shrink-0" />
+                        <Lock className="w-4 h-4 text-indigo-400 shrink-0" />
                         <input
-                          type="password"
-                          placeholder="Enter password to unlock this snippet..."
+                          ref={passwordInputRef}
+                          type={showPassword ? 'text' : 'password'}
+                          placeholder="Enter unlock password (required)..."
                           value={password}
                           onChange={(e) => setPassword(e.target.value)}
+                          autoFocus
+                          autoComplete="new-password"
                           className="bg-transparent text-xs text-[var(--wisp-text)] focus:outline-none w-full placeholder:text-[var(--wisp-muted)]/60"
                         />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(v => !v)}
+                          className="p-1 text-[var(--wisp-muted)] hover:text-[var(--wisp-text)] transition-colors cursor-pointer shrink-0"
+                          aria-label={showPassword ? 'Hide password' : 'Show password'}
+                          title={showPassword ? 'Hide password' : 'Show password'}
+                        >
+                          {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
                       </motion.div>
                     )}
                   </div>

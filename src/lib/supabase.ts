@@ -114,7 +114,7 @@ export async function createDropRecord(drop: {
 export async function getDropByCode(code: string): Promise<{ data: DropRecord | null; error: Error | null }> {
   const { data, error } = await supabase
     .rpc('get_drop_by_code', { p_code: code })
-    .single();
+    .maybeSingle();
   return { data: data as DropRecord | null, error: error ? new Error(error.message) : null };
 }
 
@@ -187,7 +187,7 @@ export async function createClipboardSession(record: ClipboardSessionRecord) {
 export async function getClipboardSession(sessionCode: string) {
   const { data, error } = await supabase
     .rpc('get_clipboard_session', { p_code: sessionCode })
-    .single();
+    .maybeSingle();
   return { data: data as ClipboardSessionRecord | null, error };
 }
 
@@ -239,7 +239,7 @@ export async function createSecureText(text: {
 export async function getSecureTextByCode(code: string): Promise<{ data: SecureTextRecord | null; error: Error | null }> {
   const { data, error } = await supabase
     .rpc('get_secure_text_by_code', { p_code: code })
-    .single();
+    .maybeSingle();
   return { data: data as SecureTextRecord | null, error: error ? new Error(error.message) : null };
 }
 

@@ -1,23 +1,32 @@
 import { NextResponse } from 'next/server';
 import { executeCleanup } from '@/lib/cleanup';
+import { checkRateLimit, getClientIp } from '@/lib/rateLimit';
+import { verifyBearerSecret } from '@/lib/security';
 
 // Force dynamic execution since cron jobs are not static
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
-  // CRON_SECRET for security if using Vercel Cron or external triggers
+  const clientIp = getClientIp(request);
+  const rl = checkRateLimit(`cron_cleanup_${clientIp}`, { limit: 10, windowMs: 60_000 });
+  if (!rl.success) {
+    return NextResponse.json(
+      { error: 'Too many requests' },
+      { status: 429, headers: { 'Retry-After': String(rl.retryAfter) } }
+    );
+  }
+
   const authHeader = request.headers.get('authorization');
-  if (
-    process.env.CRON_SECRET && 
-    authHeader !== `Bearer ${process.env.CRON_SECRET}`
-  ) {
+  const secret = process.env.CRON_SECRET || process.env.CLEANUP_SECRET;
+
+  if (!verifyBearerSecret(authHeader, secret)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   try {
     const result = await executeCleanup();
-    return NextResponse.json({ 
-      success: true, 
+    return NextResponse.json({
+      success: true,
       filesDeleted: result.dropsDeleted,
       textsDeleted: result.textsDeleted,
       timestamp: result.timestamp,

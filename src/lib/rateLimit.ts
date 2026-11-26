@@ -8,11 +8,12 @@ interface RateLimitRecord {
   resetAt: number;
 }
 
+const MAX_RATE_LIMIT_ENTRIES = 50_000;
 const rateLimitMap = new Map<string, RateLimitRecord>();
 
 // Cleanup stale records periodically
 if (typeof setInterval !== 'undefined') {
-  setInterval(() => {
+  const timer = setInterval(() => {
     const now = Date.now();
     for (const [key, record] of rateLimitMap.entries()) {
       if (record.resetAt <= now) {
@@ -20,6 +21,9 @@ if (typeof setInterval !== 'undefined') {
       }
     }
   }, 30_000);
+  if (typeof timer === 'object' && 'unref' in timer && typeof timer.unref === 'function') {
+    timer.unref();
+  }
 }
 
 export interface RateLimitOptions {
@@ -40,6 +44,11 @@ export function checkRateLimit(
   const record = rateLimitMap.get(identifier);
 
   if (!record || record.resetAt <= now) {
+    if (!record && rateLimitMap.size >= MAX_RATE_LIMIT_ENTRIES) {
+      // Evict oldest entry to prevent unbounded heap growth under IP-spoofed DDoS
+      const oldestKey = rateLimitMap.keys().next().value;
+      if (oldestKey !== undefined) rateLimitMap.delete(oldestKey);
+    }
     rateLimitMap.set(identifier, {
       count: 1,
       resetAt: now + options.windowMs,

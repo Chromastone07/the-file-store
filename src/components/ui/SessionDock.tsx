@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useGlobalSession, ActiveSession, DecryptedFile } from '@/context/GlobalSessionContext';
 import { Shield, X, MessageSquare, FileText, Activity, AlertTriangle } from 'lucide-react';
@@ -9,8 +9,9 @@ import dynamic from 'next/dynamic';
 
 const FileViewerModal = dynamic(() => import('../viewers/FileViewerModal'), { ssr: false });
 const QRScannerModal = dynamic(() => import('./QRScannerModal'), { ssr: false });
-import { recordView, destroyDrop, getDropByCode, getDropsByLookupCode, getSecureTextByCode } from '@/lib/supabase';
+import { recordView, destroyDrop, destroySecureText, getDropByCode, getDropsByLookupCode, getSecureTextByCode } from '@/lib/supabase';
 import { hashString } from '@/lib/crypto';
+import { stealth } from '@/lib/stealth';
 import { toast } from 'sonner';
 
 interface ViewerErrorBoundaryProps {
@@ -89,21 +90,91 @@ export default function SessionDock() {
   // BAR Tracking
   const viewRecordedRef = useRef<Set<string>>(new Set());
   const pendingDestroyedRef = useRef<Set<string>>(new Set());
-  const [triggerCleanup] = useState(0);
+  const burnedSessionIdsRef = useRef<Set<string>>(new Set());
 
-  // Poll for destruction of active drops using RPC (bypasses RLS) - Immediate remote panic wipe response
+  const viewingSession = activeSessions.find(s => s.id === viewingSessionId);
+  const viewingDropSession = viewingSession && viewingSession.type === 'drop' ? viewingSession : null;
+  const viewingTextSession = viewingSession && viewingSession.type === 'text' ? viewingSession : null;
+  const rawIndex = fileIndexState.sessionId === viewingSessionId ? fileIndexState.index : 0;
+  const activeFileIndex = viewingDropSession && rawIndex >= 0 && rawIndex < viewingDropSession.files.length ? rawIndex : 0;
+  const currentDropFile: DecryptedFile | undefined = viewingDropSession?.files[activeFileIndex];
+
+  // Immediately burn & purge an active session (on Close, Tab Switch, or Expiry)
+  const burnViewingSession = useCallback(
+    (session: ActiveSession, reason: 'close' | 'tab-switch' | 'expired') => {
+      if (burnedSessionIdsRef.current.has(session.id)) return;
+      burnedSessionIdsRef.current.add(session.id);
+      setTimeout(() => burnedSessionIdsRef.current.delete(session.id), 2000);
+
+      setViewingSessionId(null);
+      setFileIndexState({ sessionId: null, index: 0 });
+
+      if (session.type === 'drop' && session.files) {
+        session.files.forEach((f) => {
+          pendingDestroyedRef.current.delete(f.drop.session_code);
+          viewRecordedRef.current.delete(f.drop.session_code);
+          if (f.blobUrl) {
+            URL.revokeObjectURL(f.blobUrl);
+            f.blobUrl = '';
+          }
+          destroyDrop(f.drop.session_code).catch(() => {});
+        });
+      } else if (session.type === 'text') {
+        hashString(session.id)
+          .then((lookup) => destroySecureText(lookup).catch(() => {}))
+          .catch(() => {});
+      }
+
+      stealth.wipeMemory();
+      removeActiveSession(session.id);
+
+      if (reason === 'expired') {
+        toast.info('Session expired and was burned from memory.');
+      } else if (reason === 'tab-switch') {
+        toast.info('Burn-after-reading session burned after switching tabs.');
+      } else {
+        toast.info('Burn-after-reading session destroyed.');
+      }
+    },
+    [removeActiveSession, setViewingSessionId]
+  );
+
+  // Poll for expiry and remote wipe of active drops
   useEffect(() => {
     const dropSessions = activeSessions.filter((s): s is Extract<ActiveSession, { type: 'drop' }> => s.type === 'drop');
     if (dropSessions.length === 0) return;
 
     const pollInterval = setInterval(async () => {
       try {
+        const now = Date.now();
         for (const session of dropSessions) {
+          const expiresAt = session.expiresAt || session.files?.[0]?.drop.expires_at;
+          if (expiresAt && new Date(expiresAt).getTime() <= now) {
+            if (viewingSessionId === session.id) {
+              burnViewingSession(session, 'expired');
+            } else {
+              session.files?.forEach(f => {
+                if (f.blobUrl) {
+                  URL.revokeObjectURL(f.blobUrl);
+                  f.blobUrl = '';
+                }
+              });
+              removeActiveSession(session.id);
+              toast.info(`Drop session ${session.id} expired.`);
+            }
+            continue;
+          }
+
+          // Active BAR drops stay open in viewer until user closes, switches tabs, or timer expires
+          const isSessionBar = !!session.burnAfterReading || session.files?.some(f => f.drop.burn_after_reading);
+          if (isSessionBar) {
+            continue;
+          }
+
           const files = session.files;
           if (!files || files.length === 0) continue;
 
           for (const file of files) {
-            // Skip files already burned locally while the viewer stays open
             if (pendingDestroyedRef.current.has(file.drop.session_code)) {
               continue;
             }
@@ -147,7 +218,7 @@ export default function SessionDock() {
     }, 7000);
 
     return () => clearInterval(pollInterval);
-  }, [activeSessions, viewingSessionId, removeActiveSession, setViewingSessionId]);
+  }, [activeSessions, viewingSessionId, removeActiveSession, setViewingSessionId, burnViewingSession]);
 
   // Poll for expiry & remote panic destruction of active text sessions
   useEffect(() => {
@@ -161,6 +232,10 @@ export default function SessionDock() {
           if (viewingSessionId === session.id) setViewingSessionId(null);
           removeActiveSession(session.id);
           toast.info(`Text session ${session.id} expired.`);
+          continue;
+        }
+
+        if (session.burnAfterReading) {
           continue;
         }
 
@@ -181,57 +256,99 @@ export default function SessionDock() {
     return () => clearInterval(textInterval);
   }, [activeSessions, viewingSessionId, removeActiveSession, setViewingSessionId]);
 
-  const viewingSession = activeSessions.find(s => s.id === viewingSessionId);
-  const viewingDropSession = viewingSession && viewingSession.type === 'drop' ? viewingSession : null;
-  const viewingTextSession = viewingSession && viewingSession.type === 'text' ? viewingSession : null;
-  const rawIndex = fileIndexState.sessionId === viewingSessionId ? fileIndexState.index : 0;
-  const activeFileIndex = viewingDropSession && rawIndex >= 0 && rawIndex < viewingDropSession.files.length ? rawIndex : 0;
-  const currentDropFile: DecryptedFile | undefined = viewingDropSession?.files[activeFileIndex];
-
-  // Automatically record view for files when they are actively viewed
+  // Automatically record view / lock server blobs for files when actively viewed
   useEffect(() => {
-    if (viewingSessionId && viewingDropSession && currentDropFile) {
-      if (!viewRecordedRef.current.has(currentDropFile.drop.session_code)) {
-        if (currentDropFile.drop.burn_after_reading) {
-          destroyDrop(currentDropFile.drop.session_code).catch(console.error);
-          pendingDestroyedRef.current.add(currentDropFile.drop.session_code);
-        } else {
-          recordView(currentDropFile.drop.session_code, false).catch(console.error);
+    if (!viewingSessionId || !viewingDropSession) return;
+
+    const isBar = !!viewingDropSession.burnAfterReading || viewingDropSession.files.some(f => f.drop.burn_after_reading);
+    if (isBar) {
+      viewingDropSession.files.forEach((f) => {
+        if (!pendingDestroyedRef.current.has(f.drop.session_code)) {
+          pendingDestroyedRef.current.add(f.drop.session_code);
+          viewRecordedRef.current.add(f.drop.session_code);
+          destroyDrop(f.drop.session_code).catch(console.error);
         }
-        viewRecordedRef.current.add(currentDropFile.drop.session_code);
-      }
+      });
+      return;
+    }
+
+    if (currentDropFile && !viewRecordedRef.current.has(currentDropFile.drop.session_code)) {
+      recordView(currentDropFile.drop.session_code, false).catch(console.error);
+      viewRecordedRef.current.add(currentDropFile.drop.session_code);
     }
   }, [viewingSessionId, viewingDropSession, currentDropFile]);
 
-  // Handle BAR Cleanup ONLY when viewer is closed
+  // Exact expiry timer while a session is open in the viewer
   useEffect(() => {
-    if (pendingDestroyedRef.current.size === 0) return;
-    
-    if (!viewingSessionId) {
-      activeSessions.forEach(session => {
-        if (session.type === 'drop' && session.files) {
-          const files = session.files;
-          let allDestroyed = true;
-          files.forEach(f => {
-            if (pendingDestroyedRef.current.has(f.drop.session_code)) {
-              if (f.blobUrl) {
-                URL.revokeObjectURL(f.blobUrl);
-                f.blobUrl = ''; // Mark as revoked
-              }
-            } else {
-              allDestroyed = false;
-            }
-          });
-          
-          if (allDestroyed) {
-            files.forEach(f => pendingDestroyedRef.current.delete(f.drop.session_code));
-            toast.info(`Drop session ${session.id} destroyed.`);
-            removeActiveSession(session.id);
-          }
-        }
-      });
+    if (!viewingSession) return;
+    const expiresAt =
+      viewingSession.expiresAt ||
+      (viewingSession.type === 'drop' ? viewingSession.files?.[0]?.drop.expires_at : undefined);
+    if (!expiresAt) return;
+
+    const msRemaining = new Date(expiresAt).getTime() - Date.now();
+    if (msRemaining <= 0) {
+      const immediate = setTimeout(() => burnViewingSession(viewingSession, 'expired'), 0);
+      return () => clearTimeout(immediate);
     }
-  }, [triggerCleanup, viewingSessionId, activeSessions, removeActiveSession]);
+
+    const timer = setTimeout(() => burnViewingSession(viewingSession, 'expired'), msRemaining);
+    return () => clearTimeout(timer);
+  }, [viewingSession, burnViewingSession]);
+
+  // Burn-after-reading: stay open while viewer is active, auto-burn on tab switch or tab close
+  useEffect(() => {
+    if (!viewingSession) return;
+    const isBar =
+      viewingSession.burnAfterReading ||
+      (viewingSession.type === 'drop' && viewingSession.files?.some(f => f.drop.burn_after_reading));
+    if (!isBar) return;
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        burnViewingSession(viewingSession, 'tab-switch');
+      }
+    };
+
+    const handlePageHide = () => {
+      if (viewingSession.type === 'drop' && viewingSession.files) {
+        viewingSession.files.forEach((f) => {
+          if (f.blobUrl) URL.revokeObjectURL(f.blobUrl);
+          destroyDrop(f.drop.session_code).catch(() => {});
+        });
+      }
+      stealth.wipeMemory();
+      removeActiveSession(viewingSession.id);
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handlePageHide);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handlePageHide);
+    };
+  }, [viewingSession, burnViewingSession, removeActiveSession]);
+
+  const handleCloseDropViewer = useCallback(() => {
+    if (
+      viewingDropSession &&
+      (viewingDropSession.burnAfterReading || viewingDropSession.files?.some(f => f.drop.burn_after_reading))
+    ) {
+      burnViewingSession(viewingDropSession, 'close');
+    } else {
+      setViewingSessionId(null);
+      setFileIndexState({ sessionId: null, index: 0 });
+    }
+  }, [viewingDropSession, burnViewingSession, setViewingSessionId]);
+
+  const handleCloseTextViewer = useCallback(() => {
+    if (viewingTextSession?.burnAfterReading) {
+      burnViewingSession(viewingTextSession, 'close');
+    } else {
+      setViewingSessionId(null);
+    }
+  }, [viewingTextSession, burnViewingSession, setViewingSessionId]);
 
   const handlePillClick = (session: ActiveSession) => {
     if (session.type === 'chat') {
@@ -394,21 +511,17 @@ export default function SessionDock() {
       {viewingSessionId && viewingDropSession && currentDropFile && (
         <ViewerErrorBoundary
           key={viewingSessionId}
-          onClose={() => {
-            setViewingSessionId(null);
-            setFileIndexState({ sessionId: null, index: 0 });
-          }}
+          onClose={handleCloseDropViewer}
         >
           <FileViewerModal
-            onClose={() => {
-              setViewingSessionId(null);
-              setFileIndexState({ sessionId: null, index: 0 });
-            }}
+            onClose={handleCloseDropViewer}
             blobUrl={currentDropFile.blobUrl}
             textContent={currentDropFile.textContent}
             filename={currentDropFile.drop.encrypted_filename || 'Unknown File'}
             dropCode={currentDropFile.drop.session_code}
-            viewOnly={currentDropFile.drop.burn_after_reading}
+            viewOnly={!!(viewingDropSession.burnAfterReading || currentDropFile.drop.burn_after_reading)}
+            expiresAt={viewingDropSession.expiresAt || currentDropFile.drop.expires_at}
+            onExpired={() => burnViewingSession(viewingDropSession, 'expired')}
             currentIndex={activeFileIndex}
             totalFiles={viewingDropSession.files.length}
             onNext={() => {
@@ -416,8 +529,8 @@ export default function SessionDock() {
               const nextIdx = (activeFileIndex + 1) % files.length;
               setFileIndexState({ sessionId: viewingSessionId, index: nextIdx });
               const nextFile = files[nextIdx];
-              if (!viewRecordedRef.current.has(nextFile.drop.session_code)) {
-                recordView(nextFile.drop.session_code, nextFile.drop.burn_after_reading);
+              if (!nextFile.drop.burn_after_reading && !viewRecordedRef.current.has(nextFile.drop.session_code)) {
+                recordView(nextFile.drop.session_code, false);
                 viewRecordedRef.current.add(nextFile.drop.session_code);
               }
             }}
@@ -426,14 +539,9 @@ export default function SessionDock() {
               const prevIdx = (activeFileIndex - 1 + files.length) % files.length;
               setFileIndexState({ sessionId: viewingSessionId, index: prevIdx });
               const prevFile = files[prevIdx];
-              if (!viewRecordedRef.current.has(prevFile.drop.session_code)) {
-                recordView(prevFile.drop.session_code, prevFile.drop.burn_after_reading);
+              if (!prevFile.drop.burn_after_reading && !viewRecordedRef.current.has(prevFile.drop.session_code)) {
+                recordView(prevFile.drop.session_code, false);
                 viewRecordedRef.current.add(prevFile.drop.session_code);
-              }
-            }}
-            onMediaEnded={() => {
-              if (currentDropFile.drop.burn_after_reading) {
-                setViewingSessionId(null);
               }
             }}
           />
@@ -444,20 +552,17 @@ export default function SessionDock() {
       {viewingSessionId && viewingTextSession && (
         <ViewerErrorBoundary
           key={`text-${viewingSessionId}`}
-          onClose={() => setViewingSessionId(null)}
+          onClose={handleCloseTextViewer}
         >
           <FileViewerModal
-            onClose={() => {
-              if (viewingTextSession.burnAfterReading) {
-                removeActiveSession(viewingTextSession.id);
-              }
-              setViewingSessionId(null);
-            }}
+            onClose={handleCloseTextViewer}
             blobUrl=""
             textContent={viewingTextSession.text}
             filename={viewingTextSession.title.endsWith('.txt') ? viewingTextSession.title : `${viewingTextSession.title}.txt`}
             dropCode={viewingTextSession.id}
             viewOnly={viewingTextSession.burnAfterReading}
+            expiresAt={viewingTextSession.expiresAt}
+            onExpired={() => burnViewingSession(viewingTextSession, 'expired')}
             currentIndex={0}
             totalFiles={1}
           />

@@ -1,8 +1,13 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { checkRateLimit, getClientIp } from '@/lib/rateLimit';
+import { isSafeCode, sanitizeHexColor } from '@/lib/security';
 
 export const dynamic = 'force-dynamic';
+
+const MAX_ROOMS = 10_000;
+const MAX_DURATION_SECONDS = 7 * 24 * 3600;
+const MIN_DURATION_SECONDS = 60;
 
 interface Participant {
   id: string; // participant token
@@ -55,38 +60,59 @@ export async function POST(request: Request) {
   if (!rateLimit.success) {
     return NextResponse.json(
       { error: 'RATE_LIMIT_EXCEEDED', message: 'Too many requests. Please slow down.' },
-      { status: 429 }
+      { status: 429, headers: { 'Retry-After': String(rateLimit.retryAfter) } }
     );
   }
 
   pruneRooms();
 
   try {
-    const body = await request.json();
-    const { action, roomCode, participantToken, maxUsers = 2, durationSeconds = 300, alias, color } = body;
-
-    if (!roomCode || !action) {
-      return NextResponse.json({ error: 'INVALID_INPUT', message: 'Missing roomCode or action' }, { status: 400 });
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: 'INVALID_INPUT', message: 'Invalid JSON payload' }, { status: 400 });
     }
 
-    // Sanitize roomCode (must be alphanumeric, max 32 chars)
-    const code = String(roomCode).trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-    if (!code || code.length < 4 || code.length > 32) {
+    const { action, roomCode, participantToken, maxUsers = 2, durationSeconds = 300, alias, color } =
+      (body || {}) as Record<string, unknown>;
+
+    if (!isSafeCode(roomCode) || !action) {
       return NextResponse.json({ error: 'INVALID_CODE', message: 'Invalid room code format' }, { status: 400 });
     }
+
+    if (!isSafeCode(participantToken)) {
+      return NextResponse.json({ error: 'INVALID_TOKEN', message: 'Invalid participant token' }, { status: 400 });
+    }
+
+    const code = roomCode.trim().toUpperCase();
+    const token = participantToken.trim();
+    const safeAlias = typeof alias === 'string'
+      ? alias.replace(/[\x00-\x1F\x7F<>]/g, '').trim().slice(0, 30)
+      : '';
 
     const supabase = getSupabaseAdmin();
     let room = chatRooms.get(code);
 
     // ── CREATE ROOM ──
     if (action === 'create') {
-      const expiresAtMs = Date.now() + (durationSeconds * 1000);
+      if (!room && chatRooms.size >= MAX_ROOMS) {
+        return NextResponse.json(
+          { error: 'SERVER_BUSY', message: 'Active room capacity temporarily reached. Try again shortly.' },
+          { status: 503 }
+        );
+      }
+
+      const rawDur = Number(durationSeconds);
+      const safeDuration = Number.isFinite(rawDur)
+        ? Math.min(Math.max(MIN_DURATION_SECONDS, Math.floor(rawDur)), MAX_DURATION_SECONDS)
+        : 300;
+      const expiresAtMs = Date.now() + safeDuration * 1000;
       const expiresAtIso = new Date(expiresAtMs).toISOString();
       const safeMaxUsers = Math.min(Math.max(2, parseInt(String(maxUsers), 10) || 2), 10000);
 
       // Register session in Supabase DB as persistent source of truth
       if (supabase) {
-        // Upsert clipboard_sessions
         await supabase
           .from('clipboard_sessions')
           .upsert({
@@ -99,21 +125,21 @@ export async function POST(request: Request) {
 
       room = {
         code,
-        hostToken: participantToken,
+        hostToken: token,
         maxUsers: safeMaxUsers,
         expiresAt: expiresAtMs,
         participants: new Map(),
       };
-      
+
       const hostParticipant: Participant = {
-        id: participantToken,
-        alias: (alias || 'Host').slice(0, 30),
-        color: color || '#6366f1',
+        id: token,
+        alias: safeAlias || 'Host',
+        color: sanitizeHexColor(color, '#6366f1'),
         isHost: true,
         joinedAt: Date.now(),
         lastHeartbeat: Date.now(),
       };
-      room.participants.set(participantToken, hostParticipant);
+      room.participants.set(token, hostParticipant);
       chatRooms.set(code, room);
 
       return NextResponse.json({
@@ -173,7 +199,7 @@ export async function POST(request: Request) {
       }
 
       // 3. Check if participant is reconnecting with an already-admitted token
-      const existing = room.participants.get(participantToken);
+      const existing = room.participants.get(token);
       if (existing) {
         existing.lastHeartbeat = Date.now();
         return NextResponse.json({
@@ -204,14 +230,14 @@ export async function POST(request: Request) {
       // 5. Admit new participant
       const isHost = room.participants.size === 0;
       const newParticipant: Participant = {
-        id: participantToken,
-        alias: (alias || `User ${room.participants.size + 1}`).slice(0, 30),
-        color: color || '#10b981',
+        id: token,
+        alias: safeAlias || `User ${room.participants.size + 1}`,
+        color: sanitizeHexColor(color, '#10b981'),
         isHost,
         joinedAt: Date.now(),
         lastHeartbeat: Date.now(),
       };
-      room.participants.set(participantToken, newParticipant);
+      room.participants.set(token, newParticipant);
 
       return NextResponse.json({
         success: true,
@@ -231,7 +257,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'ROOM_NOT_FOUND', message: 'Room not active' }, { status: 404 });
       }
 
-      const participant = room.participants.get(participantToken);
+      const participant = room.participants.get(token);
       if (participant) {
         participant.lastHeartbeat = Date.now();
       }
@@ -240,20 +266,30 @@ export async function POST(request: Request) {
         success: true,
         onlineCount: room.participants.size,
         maxUsers: room.maxUsers,
-        participants: Array.from(room.participants.values()).map(p => ({
-          alias: p.alias,
-          color: p.color,
-          isHost: p.isHost,
-        })),
+        participants: participant
+          ? Array.from(room.participants.values()).map(p => ({
+              alias: p.alias,
+              color: p.color,
+              isHost: p.isHost,
+            }))
+          : [],
         expiresAt: room.expiresAt,
       });
+    }
+
+    // ── LEAVE ROOM ──
+    if (action === 'leave') {
+      if (room) {
+        room.participants.delete(token);
+      }
+      return NextResponse.json({ success: true, left: true });
     }
 
     // ── DESTROY ROOM ──
     if (action === 'destroy') {
       if (room) {
-        const participant = room.participants.get(participantToken);
-        if (!participant?.isHost && room.hostToken && room.hostToken !== participantToken) {
+        const participant = room.participants.get(token);
+        if (!participant?.isHost && room.hostToken !== token) {
           return NextResponse.json({ error: 'UNAUTHORIZED', message: 'Only the room host can destroy this room.' }, { status: 403 });
         }
         chatRooms.delete(code);

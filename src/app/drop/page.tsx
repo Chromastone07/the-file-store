@@ -28,6 +28,8 @@ import {
   Flame, 
   Lock, 
   KeyRound,
+  Eye,
+  EyeOff,
   AlertCircle,
   ArrowRight,
   AlertTriangle
@@ -42,6 +44,7 @@ export default function DropPage() {
   const [maxRecipients, setMaxRecipients] = useState<number | null>(null);
   const [addPassword, setAddPassword] = useState(false);
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [stripMetadata, setStripMetadata] = useState(true);
 
   const [qrDataUrl, setQrDataUrl] = useState('');
@@ -71,6 +74,7 @@ export default function DropPage() {
   }, [result, markHistoryDestroyed]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const passwordInputRef = useRef<HTMLInputElement>(null);
 
   const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -112,6 +116,13 @@ export default function DropPage() {
 
   const handleUpload = async () => {
     if (files.length === 0) return;
+
+    if (addPassword && !password.trim()) {
+      setFileError('Please enter a password to protect this drop, or uncheck Password.');
+      toast.error('Please enter an unlock password or uncheck Password');
+      passwordInputRef.current?.focus();
+      return;
+    }
     
     try {
       const uploadResult = await uploadFile(files, {
@@ -218,6 +229,9 @@ export default function DropPage() {
   const handleReset = () => {
     setFiles([]);
     setFileError('');
+    setAddPassword(false);
+    setPassword('');
+    setShowPassword(false);
     reset();
     setQrDataUrl('');
     setLocalIsDestroyed(false);
@@ -381,7 +395,7 @@ export default function DropPage() {
                         initial={{ opacity: 0, height: 0 }}
                         animate={{ opacity: 1, height: 'auto' }}
                         exit={{ opacity: 0, height: 0 }}
-                        className="space-y-3 pt-1 border-t border-[var(--wisp-border)] overflow-hidden"
+                        className="space-y-3 pt-1 border-t border-[var(--wisp-border)]"
                       >
                         <ExpiryControl 
                           valueSeconds={expirySeconds} 
@@ -438,7 +452,14 @@ export default function DropPage() {
                             <input 
                               type="checkbox" 
                               checked={addPassword} 
-                              onChange={(e) => setAddPassword(e.target.checked)} 
+                              onChange={(e) => {
+                                const checked = e.target.checked;
+                                setAddPassword(checked);
+                                if (!checked) {
+                                  setPassword('');
+                                  setShowPassword(false);
+                                }
+                              }} 
                               className="accent-indigo-500 w-4 h-4 cursor-pointer" 
                             />
                           </label>
@@ -446,18 +467,35 @@ export default function DropPage() {
 
                         {addPassword && (
                           <motion.div 
-                            initial={{ opacity: 0, height: 0 }}
-                            animate={{ opacity: 1, height: 'auto' }}
-                            className="flex items-center gap-2 bg-[var(--wisp-surface-glass)] border border-[var(--wisp-border)] rounded-xl px-3 py-2"
+                            initial={{ opacity: 0, y: -4 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className={`flex items-center gap-2 bg-[var(--wisp-surface-glass)] border rounded-xl px-3 py-2 transition-colors ${
+                              !password.trim() ? 'border-indigo-400/60' : 'border-[var(--wisp-border)]'
+                            }`}
                           >
-                            <Lock className="w-4 h-4 text-[var(--wisp-muted)] shrink-0" />
+                            <Lock className="w-4 h-4 text-indigo-400 shrink-0" />
                             <input
-                              type="password"
-                              placeholder="Set optional unlock password..."
+                              ref={passwordInputRef}
+                              type={showPassword ? 'text' : 'password'}
+                              placeholder="Enter unlock password (required)..."
                               value={password}
-                              onChange={(e) => setPassword(e.target.value)}
+                              onChange={(e) => {
+                                setPassword(e.target.value);
+                                if (fileError) setFileError('');
+                              }}
+                              autoFocus
+                              autoComplete="new-password"
                               className="bg-transparent text-xs text-[var(--wisp-text)] focus:outline-none w-full placeholder:text-[var(--wisp-muted)]/60"
                             />
+                            <button
+                              type="button"
+                              onClick={() => setShowPassword(v => !v)}
+                              className="p-1 text-[var(--wisp-muted)] hover:text-[var(--wisp-text)] transition-colors cursor-pointer shrink-0"
+                              aria-label={showPassword ? 'Hide password' : 'Show password'}
+                              title={showPassword ? 'Hide password' : 'Show password'}
+                            >
+                              {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                            </button>
                           </motion.div>
                         )}
 
